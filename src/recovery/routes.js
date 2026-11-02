@@ -40,7 +40,7 @@ async function startOAuth(customerId, value) {
     await db.query(`INSERT INTO recovery_oauth_states(state_hash,customer_id,shop_domain,expires_at,app_client_id)
         VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes',$4)`, [service.hash(token), customerId, domain, app.clientId]);
     const url = new URL(`https://${domain}/admin/oauth/authorize`);
-    url.search = new URLSearchParams({ client_id: app.clientId, scope: shopify.SCOPES.join(','),
+    url.search = new URLSearchParams({ client_id: app.clientId, scope: require('./knowledge').oauthScopes(domain).join(','),
         redirect_uri: redirectUri, state: token }).toString();
     return { url: url.href };
 }
@@ -127,6 +127,8 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'connected': result = await service.recordConnection(call); break;
     case 'confirm_contact': result = await service.confirmContact(call, req.body.userEventId); break;
     case 'search_products': result = await require('./catalog').searchProducts(call,req.body.query,req.body.maxPriceCents); break;
+    case 'product_details': result = await require('./catalog').productDetails(call,req.body.variantId); break;
+    case 'shop_policies': result = await require('./catalog').shopPolicies(call); break;
     case 'prepare_checkout': result = await require('./catalog').prepareCheckout(call,req.body.items,req.body.discountId); break;
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call, req.body.useDiscount, req.body.userEventId, req.body.preparedCheckoutId); break;
@@ -145,7 +147,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'latency':
         if (!['response_latency', 'playout_latency', 'tool_result_to_speech_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
         if (req.body.kind === 'tool_result_to_speech_latency' &&
-            !['context','offer','send_link','order_status','search_products','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
+            !['context','offer','send_link','order_status','search_products','product_details','shop_policies','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
         await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout',
             ...(req.body.kind === 'tool_result_to_speech_latency' ? { tool: req.body.tool } : {}) }, call.id, req.body.ms);
         result = { recorded: true };

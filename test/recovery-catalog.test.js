@@ -83,6 +83,28 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
     async function review(call,text='Ein schwarzes Shirt in M für 80 Euro, statt des alten Artikels. Soll ich dir diesen Checkout per SMS senden?'){
         await service.recordTranscript(call,{eventId:randomUUID(),role:'assistant',text});return user(call);
     }
+    await t.test('knowledge tools use the call tenant and reject revoked permission even during a lookup',async sub=>{
+        const knowledge=require('../src/recovery/knowledge'),f=await fixture(),other=await fixture();
+        const read=sub.mock.method(knowledge,'product',async(s,id)=>{
+            assert.equal(s.id,f.shop.id);assert.equal(id,variant().id);
+            return {status:'loaded',attributes:[{label:'Material',value:'Cotton'}]};
+        });
+        const policies=sub.mock.method(knowledge,'policies',async s=>{assert.equal(s.id,f.shop.id);return {status:'missing_scope'};});
+        assert.equal((await catalog.productDetails(f.call,variant().id)).attributes[0].value,'Cotton');
+        assert.equal((await catalog.shopPolicies(f.call)).status,'missing_scope');assert.equal(policies.mock.calls.length,1);
+        await assert.rejects(catalog.productDetails({...f.call,shop_id:other.shop.id},variant().id),/shop_not_found/);
+        await db.query('UPDATE recovery_calls SET identity_verified=FALSE WHERE id=$1',[f.call.id]);
+        await assert.rejects(catalog.productDetails(f.call,variant().id),/call_authorization_changed/);
+        assert.equal(read.mock.calls.length,1);
+        await db.query('UPDATE recovery_calls SET identity_verified=TRUE WHERE id=$1',[f.call.id]);
+        read.mock.mockImplementation(async()=>{
+            await db.query('UPDATE recovery_contacts SET stopped_at=NOW() WHERE shop_id=$1',[f.shop.id]);
+            return {status:'loaded',attributes:[{value:'Must not be returned after opt-out'}]};
+        });
+        await assert.rejects(catalog.productDetails(f.call,variant().id),/contact_stopped/);
+        await assert.rejects(catalog.shopPolicies(f.call),/contact_stopped/);
+        assert.equal(policies.mock.calls.length,1);
+    });
     await t.test('new product sends once and original checkout is unchanged; paid webhook credits original recovery',async()=>{
         const f=await fixture(),before=send.mock.calls.length,p=await catalog.prepareCheckout(f.call,items);
         assert.equal(p.cart.subtotalCents,8000);assert.equal(p.originalCartUnchanged,true);

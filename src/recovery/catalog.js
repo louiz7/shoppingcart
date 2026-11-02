@@ -86,6 +86,20 @@ async function searchProducts(call, query, maxPriceCents) {
     return result;
 }
 
+async function productDetails(call, variantId) {
+    const ctx = await authorized(call);
+    const result = await require('./knowledge').product(ctx.shop,variantId);
+    await authorized(call);
+    return result;
+}
+
+async function shopPolicies(call) {
+    const ctx = await authorized(call);
+    const result = await require('./knowledge').policies(ctx.shop);
+    await authorized(call);
+    return result;
+}
+
 function view(proposal) {
     return { preparedCheckoutId: proposal.id, cart: proposal.data.snapshot, offer: proposal.data.offer,
         expiresAt: proposal.data.expiresAt, originalCartUnchanged: true, purchaseCompleted: false };
@@ -182,4 +196,4 @@ async function attributeOrder(client, shop, payload, phone) {
         AND recovery_checkout_id IS NULL`,[shop.id,String(payload.id),row.id]);
 }
 
-module.exports = { search, snapshot, selection, permalink, searchProducts, prepareCheckout, verifyProposal, authorizeProposal, attributeOrder };
+module.exports = { search, snapshot, selection, permalink, authorized, searchProducts, productDetails, shopPolicies, prepareCheckout, verifyProposal, authorizeProposal, attributeOrder };

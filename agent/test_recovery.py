@@ -52,6 +52,7 @@ class RecoveryContracts(OfflineRecoveryCase):
         self.assertEqual({tool.info.name for tool in agent.tools}, {
             'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link',
             'get_order_status', 'stop_contact', 'log_outcome', 'end_call', 'search_products', 'prepare_checkout',
+            'get_product_details', 'get_shop_policies',
         })
         for tool in agent.tools:
             schema = llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema()
@@ -79,6 +80,10 @@ class RecoveryContracts(OfflineRecoveryCase):
         agent.tool.assert_awaited_with('send_link', {'useDiscount':False,'preparedCheckoutId':'server-proposal'}, context=None)
         await agent.search_products(None, 'Snowboard', max_price_cents=50000)
         agent.tool.assert_awaited_with('search_products', {'query':'Snowboard','maxPriceCents':50000})
+        await agent.get_product_details(None, 'gid://shopify/ProductVariant/2')
+        agent.tool.assert_awaited_with('product_details', {'variantId':'gid://shopify/ProductVariant/2'})
+        await agent.get_shop_policies(None)
+        agent.tool.assert_awaited_with('shop_policies')
 
     async def test_disabled_worker_exits_before_shared_project_registration(self):
         process = await asyncio.create_subprocess_exec(sys.executable, str(AGENT_PATH), 'dev',

@@ -119,7 +119,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             const ended = await send('end');
             assert.equal(ended.status, 200); assert.deepEqual(await ended.json(), { ended: true });
             assert.equal(hangup.mock.calls.at(-1).arguments[0], `recovery-${call.id}`);
-            for (const name of ['context','connected','confirm_contact','offer','send_link','order_status']) {
+            for (const name of ['context','connected','confirm_contact','offer','send_link','order_status','product_details','shop_policies']) {
                 assert.equal((await send(name)).status, 401);
             }
             assert.equal((await send('end', 'c'.repeat(64))).status, 401);

@@ -1,5 +1,7 @@
 # Recovery conversation and tool boundaries
 
+The [Shopify knowledge inventory](RECOVERY_SHOPIFY_KNOWLEDGE.md) documents product details, public metafields/metaobjects, policies, permissions, caching and query limits.
+
 GPT Live and its existing reasoning model interpret conversation intent. There are no runtime keyword lists, fixed acceptance phrases, or additional consent-classifier model calls. The voice prompt provides flexible guidance for objections, listening, interruptions and delegation. The founder persona remains disclosed as AI working for the founding team.
 
 The reasoning agent selects `confirm_contact`, `send_checkout_link(use_discount=...)` and `stop_contact`. A scoped refusal (for example, declining a discount) does not automatically stop all contact. An actual contact stop must invoke `stop_contact` immediately. Discount creation alone never means acceptance; sending defaults to a plain link with the discount parameter removed.

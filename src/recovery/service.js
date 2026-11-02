@@ -162,7 +162,7 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
         try { testNumber=policy.phone(process.env.RECOVERY_OWNER_TEST_PHONE); }
         catch { throw policy.problem('owner_test_not_authorized',409); }
     }
-    await refresh(customerId, shopId, checkoutId);
+    const refreshed = await refresh(customerId, shopId, checkoutId);
     const reservation = await transaction(async (client) => {
         // Shared with the restricted release receiver: pause and reservation must serialize.
         await client.query('SELECT pg_advisory_xact_lock(72632026029)');
@@ -195,6 +195,8 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
     if (reservation.control || reservation.simulated) return reservation;
     // The intent is durable before contacting the provider. Ambiguous failures never auto-retry.
     try {
+        // Warm descriptive knowledge only for an authorized reservation, before dialing.
+        await require('./knowledge').forCart(refreshed.shop,refreshed.checkout.snapshot.items,true);
         await refresh(customerId,shopId,checkoutId);
         const number = await transaction(async (client) => {
             const shop = await shopFor(customerId, shopId, client, true);
@@ -294,12 +296,18 @@ async function getContext(call) {
     const ctx = await refresh(call.customer_id, call.shop_id, call.checkout_id);
     const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
+    const [knowledge,availableDiscounts] = await Promise.all([
+        require('./knowledge').forCart(ctx.shop,ctx.checkout.snapshot.items),
+        discounts.available(ctx.shop,ctx.checkout.subtotal_cents),
+    ]);
+    // Contact permission can change while Shopify is responding.
+    await require('./catalog').authorized(call);
     return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop), contactConfirmed: true,
         supportEmail: ctx.checkout.snapshot.supportEmail || null,
         cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
             shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
         maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,
-        availableDiscounts: await discounts.available(ctx.shop,ctx.checkout.subtotal_cents) };
+        availableDiscounts,knowledge };
 }
 
 async function recordConnection(call) {
