@@ -26,8 +26,10 @@ The receiver validates the archive and manifest, caps compressed and expanded si
 
 Keep `NODE_ENV=production`, `RECOVERY_ONLY=1`, `RECOVERY_API_URL` and `TOOL_GATEWAY_URL` set to `http://127.0.0.1:3610`. Nginx overwrites `X-Real-IP`; the dashboard uses `ADDRESS_HEADER=x-real-ip` for its durable authentication limits. Credentials stay on the server, never in Git or the release archive. New `.env` edits on a developer laptop do not automatically rotate server secrets.
 
+The HTML document sets `Referrer-Policy` through a `same-origin` meta tag. This preserves native form origins for SvelteKit's CSRF checks and suppresses cross-origin referrers. Nginx's `no-referrer` remains the fallback for non-HTML responses; do not remove the document policy or disable CSRF to work around login failures.
+
 Initial contact flags are all off: `RECOVERY_LIVE_ENABLED=0`, `RECOVERY_SMS_ENABLED=0`, `RECOVERY_WORKER_ENABLED=0`, `GPT_LIVE_DEMO_ENABLED=0`. The worker uses the dedicated dispatch name `rescova-ecom-hetzner`. Existing local consent was revoked in the server copy so a previous one-off owner test cannot become a scheduled contact.
 
 Add `https://ecom.rescova.de/admin/integrations/shopify/callback` to the active Shopify app version's allowed redirect URLs for new merchant installations. Existing encrypted shop credentials remain usable. Operational Shopify webhook URLs must be registered against the server origin; mandatory privacy topics are configured in the Shopify app. Twilio receipts use `/webhooks/recovery/twilio`; LiveKit's signed project callback uses `/webhooks/livekit`. Preserve other destinations in the shared LiveKit project.
 
-For a rollback, dispatch the reviewed known-good commit through the release workflow. Because additive schema migrations remain applied, verify compatibility before choosing an older commit. Never run the inherited `deploy/deploy.sh` against this installation.
+For a rollback, revert the faulty application change on `main`; that commit runs through the same release workflow. The workflow deliberately refuses other branches and tags. Because additive schema migrations remain applied, verify compatibility before reverting application code. Never run the inherited `deploy/deploy.sh` against this installation.
