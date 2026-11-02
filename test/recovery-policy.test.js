@@ -98,7 +98,10 @@ test('trusted owner tests bypass timing gates but preserve customer cooldowns an
     assert.equal(p.eligibility(retry,NOW,'call',true),null);
     assert.equal(p.eligibility(retry,NOW,'call'), 'contact_cooldown');
     retry.attempts.push({created_at:NOW,is_test:true});
-    assert.equal(p.eligibility(retry,NOW,'call',true),'attempt_limit');
+    assert.equal(p.eligibility(retry,NOW,'call',true),null);
+    assert.equal(p.eligibility(retry,NOW,'call'),'attempt_limit');
+    retry.attempts.push({created_at:NOW,is_test:false});
+    assert.equal(p.eligibility(retry,NOW,'call',true),'contact_cooldown');
     for (const [error,change] of [
         ['consent_missing',(c)=>{c.contact.evidence=null;}],['already_purchased',(c)=>{c.checkout.completed_at=NOW;}],
         ['contact_stopped',(c)=>{c.contact.stopped_at=NOW;}],['checkout_expired',(c)=>{c.checkout.source_updated_at='2026-10-01';}],

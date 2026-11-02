@@ -197,7 +197,12 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             const retry=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
             assert.equal(dial.mock.calls.length,before+2);
             await s.endCall({...((await db.query('SELECT * FROM recovery_calls WHERE id=$1',[retry.id])).rows[0]),customer_id:f.customerId});
-            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/attempt_limit/);
+            const third=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
+            assert.equal(dial.mock.calls.length,before+3);
+            await s.endCall({...((await db.query('SELECT * FROM recovery_calls WHERE id=$1',[third.id])).rows[0]),customer_id:f.customerId});
+            assert.equal((await db.query('SELECT COUNT(*)::int n FROM recovery_calls WHERE shop_id=$1 AND is_test',[f.shopId])).rows[0].n,3);
+            process.env.RECOVERY_OWNER_TEST_ENABLED='0';
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/owner_test_not_authorized/);
             await db.query('UPDATE recovery_calls SET connected_at=NOW() WHERE id=$1',[call.id]);
             await hooks.ingestShopify(await s.shopFor(f.customerId,f.shopId),'orders/paid',{
                 id:'owner-test-order',checkout_token:'checkout-token-123',checkout_id:123,currency:'EUR',financial_status:'paid',current_subtotal_price:'118.00',

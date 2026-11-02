@@ -84,7 +84,8 @@ function eligibility({ shop, checkout, contact, attempts = [], active = false },
     if (action === 'call') {
         if (ownerTest!==true && !inWindow(p, contact.timezone, now)) return 'outside_call_window';
         if (active) return 'contact_busy';
-        if (attempts.length >= p.maxAttempts) return 'attempt_limit';
+        // Only service-authorized owner tests exclude prior owner tests; ordinary customer calls count every attempt.
+        if (attempts.filter(a => !(ownerTest === true && a.is_test === true)).length >= p.maxAttempts) return 'attempt_limit';
         // Explicitly authorized owner retests may follow a prior owner test; customer cooldowns still apply.
         if (attempts.some((a) => !(ownerTest===true && a.is_test===true) &&
             new Date(a.created_at) > new Date(now - p.cooldownHours * 3600000))) return 'contact_cooldown';
