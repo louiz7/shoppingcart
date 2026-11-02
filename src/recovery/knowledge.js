@@ -162,10 +162,11 @@ async function policies(shop) {
 
 function summary(product) {
     if (product.status !== 'loaded') return product;
-    return {...product,description:product.description.slice(0,2000),options:undefined,
+    return {...product,description:product.description.slice(0,2000),
+        options:product.options.map(o=>({...o,values:o.values.slice(0,10)})),
         attributes:product.attributes.slice(0,12).map(a=>({...a,value:a.value.slice(0,500),truncated:a.truncated || a.value.length>500})),
         moreDetailsAvailable:product.description.length>2000 || product.attributes.length>12 ||
-            product.attributes.some(a=>a.value.length>500)};
+            product.attributes.some(a=>a.value.length>500) || product.options.some(o=>o.values.length>10)};
 }
 
 async function forCart(shop, items, preload = false) {

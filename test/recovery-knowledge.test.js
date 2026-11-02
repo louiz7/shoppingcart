@@ -108,6 +108,7 @@ test('cart context preloads bounded unique variants and exposes a path to all re
     const a=await knowledge.forCart(shop(),[...items,items[0]],true);
     assert.equal(a.products.length,4);assert.deepEqual(a.additionalVariantIds,items.slice(4).map(i=>i.variantId));
     assert.equal(a.products[0].description.length,2000);assert.equal(a.products[0].moreDetailsAvailable,true);
+    assert.deepEqual(a.products[0].options,[{name:'Size',values:['M','L']}]);
 });
 
 test('conversation context never waits for optional Shopify knowledge or issues background requests',async t=>{
