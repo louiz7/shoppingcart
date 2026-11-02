@@ -141,8 +141,11 @@ toolsRouter.use(internal, handle(async (req, res) => {
     }
     case 'end': result = await service.endCall(call); break;
     case 'latency':
-        if (!['response_latency', 'playout_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
-        await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout' }, call.id, req.body.ms);
+        if (!['response_latency', 'playout_latency', 'tool_result_to_speech_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
+        if (req.body.kind === 'tool_result_to_speech_latency' &&
+            !['context','offer','send_link','order_status'].includes(req.body.tool)) throw policy.problem('invalid_latency');
+        await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout',
+            ...(req.body.kind === 'tool_result_to_speech_latency' ? { tool: req.body.tool } : {}) }, call.id, req.body.ms);
         result = { recorded: true };
         break;
     default: throw policy.problem('unknown_tool', 404);

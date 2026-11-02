@@ -3,17 +3,21 @@
 Run with the recovery virtualenv: python agent/evaluate_recovery.py
 Uses the configured OpenAI key/endpoint and incurs model usage. Never dials or sends SMS.
 """
+import argparse
 import asyncio
 import json
 import os
 import time
+from statistics import median
 
 from openai import AsyncOpenAI
 from livekit.agents import llm
-from recovery import BACKEND_INSTRUCTIONS, RecoveryAgent
+from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('known_price', False, [('user', 'Wie viel kostet das Shirt nochmal?')], 'no_tools', None),
+    ('known_material', False, [('user', 'Ist das denn Baumwolle?')], 'no_tools', None),
     ('de_sms_natural', False, [('assistant', 'Soll ich dir den Link per SMS schicken?'), ('user', 'Das wäre super.')], 'send_checkout_link', False),
     ('en_sms_natural', False, [('assistant', 'Would you like the checkout link by text?'), ('user', 'Please do.')], 'send_checkout_link', False),
     ('ready_buyer', False, [('user', 'Ich brauche keine Beratung, schick mir einfach den Checkout per SMS.')], 'send_checkout_link', False),
@@ -32,13 +36,20 @@ CASES = [
 
 
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--low-reasoning', action='store_true', help='Compare with low reasoning effort')
+    args = parser.parse_args()
+    options = backend_options()
+    if args.low_reasoning:
+        options['reasoning'] = {'effort':'low'}
+    timings = []
     agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None)
     schemas = []
     for tool in agent.tools:
         schemas.append({'type':'function', 'name':tool.info.name, 'description':tool.info.description,
             'parameters':llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema(), 'strict':False})
     context = {'contactConfirmed':True, 'supportEmail':'help@example.invalid',
-        'cart':{'currency':'EUR','subtotalCents':10000,'items':[{'title':'Synthetic cotton shirt','description':'Cotton, available in M and L.'}]},
+        'cart':{'currency':'EUR','subtotalCents':10000,'items':[{'title':'Synthetic cotton shirt','quantity':1,'originalUnitCents':10000,'currentPriceCents':10000,'description':'Cotton, available in M and L.'}]},
         'availableDiscounts':[{'id':'synthetic-discount','percent':10}]}
     limits = asyncio.Semaphore(3)
     async with AsyncOpenAI(base_url=os.environ.get('OPENAI_BASE_URL') or 'https://eu.api.openai.com/v1',
@@ -53,22 +64,28 @@ async def main():
             history += [{'role':role,'content':text} for role,text in dialog]
             async with limits:
                 start = time.monotonic()
-                result = await client.responses.create(model=os.environ.get('OPENAI_RECOVERY_BACKEND_MODEL','gpt-5.6-luna'),
-                    instructions=BACKEND_INSTRUCTIONS, input=history, tools=schemas,
-                    parallel_tool_calls=False, store=False)
+                result = await client.responses.create(**options, input=history, tools=schemas, store=False)
                 elapsed = round((time.monotonic()-start)*1000)
+                timings.append(elapsed)
             calls = [item for item in result.output if item.type == 'function_call']
-            if expected:
-                passed = len(calls)==1 and calls[0].name==expected
+            # log_outcome(refused/wrong_person) performs the same durable contact stop in the service.
+            stops_contact = any(item.name == 'stop_contact' or
+                (item.name == 'log_outcome' and json.loads(item.arguments).get('outcome') in ('refused','wrong_person'))
+                for item in calls)
+            if expected == 'no_tools':
+                passed = not calls
+            elif expected:
+                passed = len(calls)==1 and (stops_contact if expected=='stop_contact' else calls[0].name==expected)
                 if discount is not None and passed:
                     passed = json.loads(calls[0].arguments).get('use_discount',False) is discount
             else:
-                passed = not any(item.name in ('send_checkout_link','stop_contact','end_call') for item in calls)
+                passed = not stops_contact and not any(item.name in ('send_checkout_link','end_call') for item in calls)
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
                 'ms':elapsed}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in CASES))
-    print(json.dumps({'passed':sum(results),'total':len(results)}))
+    print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
+        'p50Ms':median(timings), 'maxMs':max(timings)}))
     if not all(results):
         raise SystemExit(1)
 

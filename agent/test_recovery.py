@@ -169,6 +169,13 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 self.greeting_calls += 1
                 if failure == 'greeting':
                     raise RuntimeError('synthetic greeting failure')
+                if finish in ('tool_latency','tool_latency_interrupted'):
+                    await self.start_options['agent'].get_cart_context(None)
+                    if finish == 'tool_latency_interrupted':
+                        self.emit('user_state_changed',SimpleNamespace(new_state='speaking',old_state='listening'))
+                    self.emit('agent_state_changed',SimpleNamespace(new_state='speaking',old_state='thinking'))
+                    self.emit('agent_state_changed',SimpleNamespace(new_state='speaking',old_state='listening'))
+                    self.emit('close',None)
                 if finish == 'conversation_items':
                     for item in [module.llm.AgentHandoff(old_agent_id=None, new_agent_id='synthetic-agent'),
                                  module.llm.FunctionCall(call_id='synthetic-call', name='synthetic-tool', arguments='{}'),
@@ -204,6 +211,8 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 self.assertEqual(model.call_args.kwargs['base_url'],
                     os.environ.get('OPENAI_BASE_URL') or 'https://eu.api.openai.com/v1')
                 self.assertEqual(model.call_args.kwargs['voice'],self.module.profile_options(http.initial)['preset'])
+                self.assertNotIn('reasoning',model.call_args.kwargs['responses_options'])
+                self.assertEqual(model.call_args.kwargs['responses_options']['text'],{'verbosity':'low'})
 
     async def test_profile_selects_fixed_language_voice_and_disclosed_founder_greeting(self):
         voices = {'de': {'male': 'flitz','female': 'nuri'},'en': {'male': 'meridian','female': 'gleam'}}
@@ -319,6 +328,30 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertEqual([name for name, _ in writes], ['transcript','transcript','send_link'])
         self.assertEqual(writes[-1][1]['userEventId'], writes[1][1]['eventId'])
         self.assertFalse(writes[-1][1]['useDiscount'])
+
+    async def test_contact_confirmation_returns_cart_in_one_model_tool_call(self):
+        agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
+        cart = '{"contactConfirmed":true,"cart":{"items":[]}}'
+        agent.tool = AsyncMock(side_effect=['{"contactConfirmed":true}',cart])
+        self.assertEqual(await agent.confirm_contact(None),cart)
+        self.assertEqual([call.args[0] for call in agent.tool.await_args_list],['confirm_contact','context'])
+        agent.tool = AsyncMock(return_value='{"error":"conversation_changed"}')
+        self.assertEqual(json.loads(await agent.confirm_contact(None))['error'],'conversation_changed')
+        self.assertEqual(agent.tool.await_count,1)
+
+    async def test_tool_to_next_speech_metric_is_recorded_once_without_replacing_response_metric(self):
+        ctx,http,session = self.fixture(finish='tool_latency')
+        await self.run_fixture(ctx,http,session)
+        metrics = [payload for name,payload in http.payloads if name=='latency']
+        self.assertEqual(len(metrics),1)
+        self.assertEqual(metrics[0]['kind'],'tool_result_to_speech_latency')
+        self.assertEqual(metrics[0]['tool'],'context')
+        self.assertGreaterEqual(metrics[0]['ms'],0)
+
+    async def test_customer_speech_does_not_inflate_post_tool_silence(self):
+        ctx,http,session = self.fixture(finish='tool_latency_interrupted')
+        await self.run_fixture(ctx,http,session)
+        self.assertEqual([payload for name,payload in http.payloads if name=='latency'],[])
 
     async def test_new_user_turn_or_interrupted_response_invalidates_pending_action(self):
         for interrupted in [False, True]:

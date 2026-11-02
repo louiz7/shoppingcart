@@ -72,6 +72,27 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         return s.sendLink(call,useDiscount,rows[0]?.data.eventId);
     }
 
+    await t.test('post-tool speech timing validates attribution and persists separately from API latency', async () => {
+        const f = await fixture(); await activate(f); const call = await fakeCall(f),token='d'.repeat(64);
+        await db.query('UPDATE recovery_calls SET token_hash=$2 WHERE id=$1',[call.id,s.hash(token)]);
+        const express=require('express'),app=express();app.use(express.json());
+        app.use('/internal/recovery/tools',require('../src/recovery/routes').toolsRouter);
+        const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+        const previous=process.env.INTERNAL_TOOL_SECRET;process.env.INTERNAL_TOOL_SECRET='synthetic-latency-secret';
+        try {
+            const send = body => originalFetch(`http://127.0.0.1:${server.address().port}/internal/recovery/tools/latency`,{
+                method:'POST',headers:{'Content-Type':'application/json','x-internal-secret':process.env.INTERNAL_TOOL_SECRET,'x-call-token':token},body:JSON.stringify(body)});
+            assert.equal((await send({kind:'tool_result_to_speech_latency',tool:'offer',ms:3800})).status,200);
+            for(const body of [{kind:'tool_result_to_speech_latency',tool:'arbitrary',ms:1},
+                {kind:'tool_result_to_speech_latency',tool:'offer',ms:-1}])assert.equal((await send(body)).status,400);
+            const {rows}=await db.query("SELECT duration_ms,data FROM recovery_events WHERE call_id=$1 AND kind='tool_result_to_speech_latency'",[call.id]);
+            assert.equal(rows.length,1);assert.equal(rows[0].duration_ms,3800);assert.equal(rows[0].data.tool,'offer');
+        } finally {
+            await new Promise(resolve=>server.close(resolve));
+            if(previous===undefined)delete process.env.INTERNAL_TOOL_SECRET;else process.env.INTERNAL_TOOL_SECRET=previous;
+        }
+    });
+
     await t.test('expired or deactivated calls can only close their own real room, never run more shop actions', async () => {
         const f = await fixture(); await activate(f); const call = await fakeCall(f);
         const token = 'b'.repeat(64);
