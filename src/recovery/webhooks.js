@@ -60,13 +60,14 @@ async function ingestShopify(shop, topic, payload, eventId) {
                 payload.currency || shop.currency || 'EUR', paid,
                 payload.cancelled_at ? 0 : net, payload.updated_at, payload.created_at,
                 orderPhone ? policy.contactKey(shop.id, orderPhone) : null, paid ? payload.updated_at : null, topic, payload.test === true]);
+            await require('./catalog').attributeOrder(client,shop,payload,orderPhone);
             // Keep exact checkout evidence after retention removes sensitive recovery tokens.
             await client.query(`UPDATE recovery_orders o SET recovery_checkout_id=c.id FROM recovery_checkouts c
                 WHERE o.shop_id=$1 AND o.external_id=$2 AND o.recovery_checkout_id IS NULL AND c.shop_id=o.shop_id AND
                 ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id)`,[shop.id,String(payload.id)]);
             await client.query(`UPDATE recovery_checkouts c SET completed_at=COALESCE(c.completed_at,$2),status='converted'
                 FROM recovery_orders o WHERE o.shop_id=$1 AND o.external_id=$3 AND c.shop_id=o.shop_id AND
-                ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id OR
+                (o.recovery_checkout_id=c.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id OR
                 (o.phone=c.phone AND o.ordered_at>=c.source_updated_at))`, [shop.id, payload.created_at, String(payload.id)]);
         } else if (topic === 'checkouts/delete') {
             await client.query(`UPDATE recovery_checkouts SET status='expired' WHERE shop_id=$1 AND external_id=$2 AND status!='converted'`,

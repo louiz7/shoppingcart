@@ -51,7 +51,7 @@ class RecoveryContracts(OfflineRecoveryCase):
         agent = module.RecoveryAgent('synthetic-token', {'brand': 'Test', 'brandVoice': 'Friendly'}, None)
         self.assertEqual({tool.info.name for tool in agent.tools}, {
             'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link',
-            'get_order_status', 'stop_contact', 'log_outcome', 'end_call',
+            'get_order_status', 'stop_contact', 'log_outcome', 'end_call', 'search_products', 'prepare_checkout',
         })
         for tool in agent.tools:
             schema = llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema()
@@ -68,6 +68,17 @@ class RecoveryContracts(OfflineRecoveryCase):
         model = openai.realtime.GPTLiveModel(api_key='test-only-not-a-real-key', model='gpt-live-1', voice='flitz',
             responses_options={'model': 'gpt-5.6-luna', 'instructions': module.BACKEND_INSTRUCTIONS, 'parallel_tool_calls': False})
         self.assertIsNotNone(model)
+
+    async def test_alternative_cart_tools_preserve_selected_variants_and_default_no_discount(self):
+        import recovery
+        agent = recovery.RecoveryAgent('synthetic', {'brand':'Test','brandVoice':'Friendly'}, None)
+        agent.tool = AsyncMock(return_value='{}')
+        await agent.prepare_checkout(None, [recovery.CheckoutItem(variant_id='gid://shopify/ProductVariant/2', quantity=2)])
+        agent.tool.assert_awaited_with('prepare_checkout', {'items':[{'variantId':'gid://shopify/ProductVariant/2','quantity':2}], 'discountId':None})
+        await agent.send_checkout_link(None, prepared_checkout_id='server-proposal')
+        agent.tool.assert_awaited_with('send_link', {'useDiscount':False,'preparedCheckoutId':'server-proposal'}, context=None)
+        await agent.search_products(None, 'Snowboard', max_price_cents=50000)
+        agent.tool.assert_awaited_with('search_products', {'query':'Snowboard','maxPriceCents':50000})
 
     async def test_disabled_worker_exits_before_shared_project_registration(self):
         process = await asyncio.create_subprocess_exec(sys.executable, str(AGENT_PATH), 'dev',
