@@ -56,6 +56,9 @@ class RecoveryContracts(OfflineRecoveryCase):
         for tool in agent.tools:
             schema = llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema()
             self.assertIsInstance(schema, dict)
+            if tool.info.name == 'send_checkout_link':
+                self.assertEqual(schema['properties']['use_discount']['default'], False)
+                self.assertEqual(schema['properties']['use_discount']['type'], 'boolean')
             if tool.info.name == 'get_offer':
                 self.assertIn('discount_id', schema['properties'])
         agent.tool = AsyncMock(return_value='{"confirmed":true}')

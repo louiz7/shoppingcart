@@ -104,6 +104,16 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         assert.equal(send.mock.calls[before].arguments[1], `Test shop: Hier ist Ihr gewünschter Checkout-Link: ${f.snapshot.checkoutUrl}`);
         assert.equal((await db.query(`SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [f.checkoutId])).rows[0].n, 0);
     });
+    await t.test('plain links strip discount parameters while preserving the original checkout token', async () => {
+        const f = await fixture(), before = send.mock.calls.length;
+        const original = `${f.snapshot.checkoutUrl}&discount=EXISTING&discount=SECOND`;
+        await db.query("UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{checkoutUrl}',to_jsonb($2::text)) WHERE id=$1",[f.checkoutId,original]);
+        await assert.rejects(service.sendLink(f.call,'true'),/invalid_discount_selection/);
+        await service.sendLink(f.call,false);
+        const link = new URL(send.mock.calls[before].arguments[1].split(' ').at(-1));
+        assert.equal(link.searchParams.has('discount'),false);
+        assert.equal(link.searchParams.get('key'),'synthetic');
+    });
     await t.test('disabled or missing SMS configuration reserves no intent', async () => {
         const f = await fixture(), before = send.mock.calls.length;
         ready.mock.mockImplementation(() => { throw policy.problem('sms_disabled', 409); });
@@ -128,11 +138,11 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
     await t.test('unconfirmed or simulated discounts are not sent through a live checkout SMS', async () => {
         const f = await fixture(), before = send.mock.calls.length;
         await db.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'offer','unknown','{}')`, [randomUUID(), f.checkoutId]);
-        await assert.rejects(service.sendLink(f.call), /valid_offer_required/);
+        await assert.rejects(service.sendLink(f.call, true), /valid_offer_required/);
         await db.query(`UPDATE recovery_actions SET status='simulated',data=$2 WHERE checkout_id=$1 AND kind='offer'`, [f.checkoutId,
             JSON.stringify({ ...policy.offer({}, 11800, 10), currency: 'USD', expiresAt: new Date(Date.now()+3600000).toISOString(),
                 cartHash: policy.cartHash(f.snapshot), checkoutUrl: `${f.snapshot.checkoutUrl}&discount=FAKE` })]);
-        await assert.rejects(service.sendLink(f.call), /valid_offer_required/);
+        await assert.rejects(service.sendLink(f.call, true), /valid_offer_required/);
         assert.equal(send.mock.calls.length, before);
     });
     await t.test('receipt before acknowledgement and immediate delivery survive persistence', async () => {

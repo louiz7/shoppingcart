@@ -111,6 +111,38 @@ function checkoutUrl(value, shop, code) {
     return url.href;
 }
 
+// Conservative transcript proof: a generic SMS request is never discount agreement.
+function discountAgreement(turns, offer) {
+    let prompt = '', accepted = null;
+    const discount = /\b(rabatt|rabattcode|discount|code)\b/i;
+    const negative = /\b(nein|nicht|kein\w*|ohne|später|vielleicht|aber|wenn|statt|regulär|no|not|without|later|maybe|never|but|if|instead|full price|don['’]?t)\b/i;
+    const affirmative = /^\s*(ja|yes|sure|okay|ok|klar|gerne|einverstanden|agreed|abgemacht|sounds good)\b/i;
+    const agreementQuestion = /einverstanden|akzeptier|annehmen|nutzen|\bagree\b|\baccept\b|\buse\b/i;
+    const percentages = (text) => [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:%|prozent|percent)/gi)]
+        .map((match) => Number(match[1].replace(',', '.')));
+    const quoted = (text) => discount.test(text) && percentages(text).length === 1 &&
+        percentages(text)[0] === offer.percent && agreementQuestion.test(text) &&
+        !/\b(oder|or)\b/i.test(text) && !negative.test(text);
+    const words = Object.fromEntries([
+        'null|eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf|dreizehn|vierzehn|fünfzehn|sechzehn|siebzehn|achtzehn|neunzehn|zwanzig|einundzwanzig|zweiundzwanzig|dreiundzwanzig|vierundzwanzig|fünfundzwanzig|sechsundzwanzig|siebenundzwanzig|achtundzwanzig|neunundzwanzig|dreißig',
+        'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty one|twenty two|twenty three|twenty four|twenty five|twenty six|twenty seven|twenty eight|twenty nine|thirty',
+    ].flatMap((language) => language.split('|').map((word, value) => [word,value])));
+    const numberWords = new RegExp(`\\b(${Object.keys(words).sort((a,b) => b.length-a.length).join('|')})\\b`, 'gi');
+    for (const turn of turns) {
+        const text = String(turn.data?.text || '').replaceAll('-', ' ').replace(numberWords, (word) => String(words[word.toLowerCase()]));
+        if (turn.kind === 'assistant_transcript') {
+            if (discount.test(text) && agreementQuestion.test(text)) accepted = null;
+            prompt = text;
+            continue;
+        }
+        if (negative.test(text)) accepted = null;
+        else if (affirmative.test(text) && quoted(prompt) &&
+            percentages(text).every((value) => value === offer.percent)) accepted = turn.data.eventId;
+        prompt = '';
+    }
+    return accepted;
+}
+
 function cartHash(snapshot) {
     return createHash('sha256').update(JSON.stringify({ currency: snapshot.currency, subtotalCents: snapshot.subtotalCents,
         discountCodes: snapshot.discountCodes, items: snapshot.items?.map((i) => [i.variantId, i.quantity,
@@ -152,4 +184,4 @@ function experimentReport(rows, costsCents = 0) {
 }
 
 module.exports = { DEFAULT_RULES, problem, rules, cents, phone, contactKey, assignment, inWindow,
-    eligibility, offer, checkoutUrl, cartHash, conversationPermission, explicitSmsRequest, stopSignal, experimentReport };
+    eligibility, offer, checkoutUrl, cartHash, discountAgreement, conversationPermission, explicitSmsRequest, stopSignal, experimentReport };

@@ -37,6 +37,11 @@ Akzeptiere ein Nein sofort ohne weitere Verkaufsfrage. Delegiere jeden Kontaktst
 falsche Person und Mailbox unmittelbar; keine Details auf Mailboxen sprechen.
 Bei Interesse frage nach dem Kaufhindernis. Rabatt nur bei Bedarf, niemals Druck,
 Knappheit, menschliche Identität oder erfolgten Kauf vortäuschen. Keine Zahlungsdaten abfragen.
+Ein Backend-Angebot ist noch keine Zustimmung. Frage nach dem bestätigten Angebot ausdrücklich,
+ob die Person mit dem konkreten Prozentsatz Rabatt einverstanden ist, etwa: "Bist du mit diesen 10 Prozent Rabatt einverstanden?"
+oder "Do you agree to this 10 percent discount?". Setze immer den tatsächlich bestätigten Prozentsatz ein.
+Erst nach Zustimmung darf ein Rabatt-Link versandt werden.
+Ohne Rabattzustimmung bleibt der Checkout-Link ohne Rabattparameter.
 Zum Senden eines Checkout-Links frage ausdrücklich nach SMS-Erlaubnis; nur an die hinterlegte Nummer.
 Bei Fehlern nichts versprechen. Biete menschliche Hilfe an und verabschiede dich einmal.
 Käuferfragen und menschliche Hilfe gehören an den Shop, niemals an den technischen Rescova-Support.
@@ -58,6 +63,12 @@ Wähle Rabatte ausschließlich aus availableDiscounts im bestätigten Warenkorbk
 Übergib deren id als discount_id an get_offer; Backend prüft Gültigkeit und Grenzen erneut.
 Keine angebotenen Rabatte bedeutet keinen Rabatt anbieten. Nie Codes oder Preise erfinden. Nicht kombinieren.
 Die endgültige Einlösbarkeit prüft Shopify im Checkout; keinen garantierten Rabatt bei früherer Einlösung versprechen.
+Ohne ausdrückliche Zustimmung zum konkreten Rabatt sende send_checkout_link mit use_discount=false.
+Ein angelegtes Angebot oder eine allgemeine Kaufabsicht/SMS-Bitte ist keine Rabattzustimmung.
+get_offer bestätigt nur das Angebot. Der Gesprächsagent holt danach die ausdrückliche Zustimmung zum konkreten Prozentsatz ein.
+Nur nach einer ausdrücklichen Zustimmung auf diese Rabattfrage use_discount=true verwenden.
+Bei discount_agreement_required erneut den konkreten Prozentsatz bestätigen lassen; nie eigenmächtig ohne den versprochenen Rabatt senden.
+Widerruft die Person den Rabattwunsch und möchte ohne Rabatt kaufen, use_discount=false.
 Für den ursprünglichen Checkout-Link ohne Rabatt ist get_offer nicht erforderlich.
 send_checkout_link nur nach explizitem SMS-Wunsch; Backend prüft das protokollierte Transkript.
 accepted heißt nur beim Provider angenommen, delivered bedeutet zugestellt. Unbekannt ist kein Erfolg.
@@ -138,9 +149,9 @@ class RecoveryAgent(Agent):
         return await self.tool('offer', {'percent': percent, 'discountId': discount_id or None})
 
     @function_tool()
-    async def send_checkout_link(self, context: RunContext) -> str:
-        """Sendet den bestätigten Checkout-Link genau einmal nach explizitem SMS-Wunsch."""
-        return await self.tool('send_link')
+    async def send_checkout_link(self, context: RunContext, use_discount: bool = False) -> str:
+        """SMS-Link; use_discount nur nach ausdrücklicher Zustimmung zum bestätigten Rabatt, sonst False."""
+        return await self.tool('send_link', {'useDiscount': use_discount})
 
     @function_tool()
     async def get_order_status(self, context: RunContext) -> str:

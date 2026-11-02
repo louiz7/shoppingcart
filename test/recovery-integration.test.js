@@ -318,11 +318,17 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
                 SELECT gen_random_uuid(),shop_id,id,'user_transcript',
                     jsonb_build_object('text','Bitte keine SMS senden.','eventId',gen_random_uuid()),clock_timestamp()
                 FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /explicit_sms_request_required/ },
+            { sql: `INSERT INTO recovery_events(id,shop_id,call_id,kind,data,created_at)
+                SELECT gen_random_uuid(),shop_id,id,'user_transcript',
+                    jsonb_build_object('text','Bitte senden Sie mir den Link per SMS, aber ohne Rabatt.','eventId',gen_random_uuid()),clock_timestamp()
+                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /discount_agreement_required/ },
         ];
         for (const change of changes) {
             const f = await fixture(); await activate(f); const call = await fakeCall(f);
             await db.query(`UPDATE recovery_shops SET mode='live' WHERE id=$1`, [f.shopId]);
             await s.getOffer(call, 10);
+            await s.recordTranscript(call, { role: 'assistant', eventId: randomUUID(), text: 'Bist du mit 10 Prozent Rabatt einverstanden?' });
+            await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Ja, gerne.' });
             await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Bitte senden Sie mir den Link per SMS.' });
             const name = `recovery_sms_test_${randomUUID().replaceAll('-', '')}`;
             // Inject a change at the reservation boundary without contacting external providers.
@@ -332,10 +338,10 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
                 await db.query(`CREATE TRIGGER ${name} AFTER INSERT ON recovery_actions FOR EACH ROW
                     WHEN (NEW.kind='sms' AND NEW.checkout_id='${f.checkoutId}') EXECUTE FUNCTION ${name}()`);
                 const before = sms.mock.calls.length;
-                await assert.rejects(s.sendLink(call), change.error);
+                await assert.rejects(s.sendLink(call, true), change.error);
                 assert.equal(sms.mock.calls.length, before);
                 assert.equal((await db.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [f.checkoutId])).rows[0].status, 'failed');
-                assert.deepEqual(await s.sendLink(call), { status: 'failed', duplicate: true });
+                assert.deepEqual(await s.sendLink(call, true), { status: 'failed', duplicate: true });
                 assert.equal(sms.mock.calls.length, before);
             } finally { await db.query(`DROP FUNCTION ${name}() CASCADE`); }
         }
