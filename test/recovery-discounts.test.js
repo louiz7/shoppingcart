@@ -97,7 +97,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         await assert.rejects(discounts.create(f.customerId,f.shopId,{ ...f.input,percent: 5 }),/discount_request_reused/);
         await assert.rejects(discounts.create(f.customerId,f.shopId,{ ...f.input,requestId: randomUUID() }),/discount_code_exists/);
         const settings = await discounts.settings(f.customerId);
-        assert.deepEqual(Object.keys(settings.shops[0]).sort(),['brand','currency','discounts','domain','id','maxDiscountPercent','minSubtotalCents']);
+        assert.deepEqual(Object.keys(settings.shops[0]).sort(),['agentProfile','brand','currency','discounts','domain','id','maxDiscountPercent','minSubtotalCents']);
         assert.deepEqual(settings.shops[0].discounts,[replay.discount]);
     });
     await t.test('ambiguous and explicit failures stay durable and never issue a second Shopify creation',async () => {
@@ -115,8 +115,13 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
     });
     await t.test('identity-gated agent context and selected offer derive percent and code from the approved catalog',async () => {
         const f = await fixture(),approved = (await discounts.create(f.customerId,f.shopId,f.input)).discount,call = await caller(f);
-        assert.equal((await service.getContext({ ...call,identity_verified: false })).availableDiscounts,undefined);
-        assert.deepEqual((await service.getContext(call)).availableDiscounts,[approved]);
+        const profile = { name: 'Alex',persona: 'founder',voice: 'female',language: 'en' };
+        await db.query('UPDATE recovery_shops SET agent_profile=$2 WHERE id=$1',[f.shopId,JSON.stringify(profile)]);
+        const anonymous = await service.getContext({ ...call,identity_verified: false }),identified = await service.getContext(call);
+        assert.equal(anonymous.availableDiscounts,undefined);
+        assert.deepEqual(anonymous.agentProfile,require('../src/recovery/agent-profile').forShop({ ...f.shop,agent_profile: profile }));
+        assert.deepEqual(identified.agentProfile,anonymous.agentProfile);
+        assert.deepEqual(identified.availableDiscounts,[approved]);
         await assert.rejects(service.getOffer(call,10),/approved_discount_required/);
         const offer = await service.getOffer(call,0,approved.id);
         assert.equal(offer.percent,10); assert.equal(offer.discountId,approved.id); assert.equal(offer.code,'RETURN10');

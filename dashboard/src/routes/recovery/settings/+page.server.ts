@@ -15,6 +15,31 @@ export const load: PageServerLoad = async ({ locals, setHeaders }) => {
 };
 
 export const actions: Actions = {
+	agentProfile: async ({ locals, request }) => {
+		const feedback = { error: undefined, success: undefined, values: undefined, uncertain: false };
+		if (locals.user?.role !== 'admin') return fail(403, { ...feedback, agentError: 'Nur Händler-Admins können den Agenten anpassen.', agentSuccess: undefined, agentValues: undefined });
+		const input = await request.formData();
+		const shopId = String(input.get('shopId') || '');
+		const profile = { name: String(input.get('name') || '').trim(), persona: String(input.get('persona') || ''),
+			voice: String(input.get('voice') || ''), language: String(input.get('language') || '') };
+		const agentValues = { shopId, ...profile };
+		if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(shopId) ||
+			[...profile.name].length < 1 || [...profile.name].length > 40 || !/^[\p{L}][\p{L}\p{M} '\u2019-]*$/u.test(profile.name) ||
+			!['founder', 'assistant'].includes(profile.persona) || !['male', 'female'].includes(profile.voice) || !['de', 'en'].includes(profile.language)) {
+			return fail(400, { ...feedback, agentError: 'Bitte prüfe den Namen und die ausgewählten Optionen. Namen dürfen 1–40 Zeichen lang sein und Buchstaben, Leerzeichen, Apostrophe oder Bindestriche enthalten.', agentSuccess: undefined, agentValues });
+		}
+		try {
+			const result = await recoveryRequest(locals.user.customerId, `/shops/${shopId}/agent-profile`, profile, locals.user.id);
+			return { ...feedback, agentSuccess: 'Dein Agent wurde gespeichert. Die Einstellungen gelten für neue Gespräche.', agentError: undefined,
+				agentValues: { shopId, ...result.agentProfile } };
+		} catch (error) {
+			const code = error instanceof Error ? error.message : '';
+			return fail(code === 'admin_required' ? 403 : 400, { ...feedback, agentValues, agentSuccess: undefined,
+				agentError: code === 'invalid_agent_profile' ? 'Bitte prüfe den Namen und die ausgewählten Optionen.'
+					: code === 'admin_required' ? 'Nur Händler-Admins können den Agenten anpassen.'
+						: 'Die Einstellungen konnten nicht bestätigt werden. Bitte lade den aktuellen Stand neu oder speichere erneut.' });
+		}
+	},
 	connect: async ({ locals, request }) => {
 		if (locals.user?.role !== 'admin') return fail(403, { error: undefined, success: undefined, values: undefined, uncertain: false,
 			connectError: 'Nur Händler-Admins können Shopify-Shops verbinden.', connectDomain: '' });

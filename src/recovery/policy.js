@@ -118,14 +118,14 @@ function cartHash(snapshot) {
 }
 
 function explicitSmsRequest(text) {
-    const normalized = String(text || '').toLowerCase().replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (/\b(nein|nicht|kein|keine|stop|widerruf)\b/.test(normalized)) return false;
-    return /\b(schick|schicke|sende|send|senden)\b.*\b(link|sms)\b/.test(normalized) ||
-        /\b(ja|bitte)\b.*\b(link|sms)\b/.test(normalized);
+    const normalized = String(text || '').toLowerCase().replace(/\u2019/g,"'").replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (/\b(nein|nicht|kein|keine|stop|widerruf|no|not|never|without|cannot|refuse|decline|cancel|don'?t|didn'?t|can'?t|won'?t|wouldn'?t|shouldn'?t|couldn'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|aren'?t|weren'?t)\b/.test(normalized)) return false;
+    return /\b(schick|schicke|sende|send|senden|text)\b.*\b(link|sms)\b/.test(normalized) ||
+        /\b(ja|bitte|yes|please)\b.*\b(link|sms)\b/.test(normalized);
 }
 
 function stopSignal(text) {
-    return /^\s*(nein|no)[\s.!?,]*$/i.test(String(text)) || /\b(kein interesse|nicht interessiert|nicht mehr anrufen|nicht anrufen|keine anrufe|falsche nummer|falsche person|kontaktverbot|widerrufe|stop|nein danke)\b/i.test(String(text));
+    return /^\s*(nein|no)[\s.!?,]*$/i.test(String(text)) || /\b(kein interesse|nicht interessiert|nicht mehr anrufen|nicht anrufen|keine anrufe|falsche nummer|falsche person|kontaktverbot|widerrufe|stop|nein danke|not interested|no thanks|no thank you|do not (call|contact)|don['\u2019]?t (call|contact)|stop (calling|contacting)|wrong (number|person)|remove (me|my number)|revoke (my )?consent|withdraw (my )?consent)\b/i.test(String(text));
 }
 
 function experimentReport(rows, costsCents = 0) {

@@ -77,6 +77,7 @@ async function settings(customerId) {
     const rows = await db.query(`SELECT d.* FROM recovery_discounts d JOIN recovery_shops s ON s.id=d.shop_id
         JOIN customers c ON c.id=s.customer_id WHERE s.customer_id=$1 AND s.mode='live' AND c.is_active ORDER BY d.created_at DESC`, [customerId]);
     return { shops: shops.rows.map((shop) => ({ id: shop.id,brand: shop.brand,domain: shop.domain,currency: shop.currency,
+        agentProfile: require('./agent-profile').forShop(shop),
         maxDiscountPercent: policy.rules(shop.rules).maxDiscountPercent,minSubtotalCents: policy.rules(shop.rules).minSubtotalCents,
         discounts: rows.rows.filter((row) => row.shop_id===shop.id).map(view) })) };
 }

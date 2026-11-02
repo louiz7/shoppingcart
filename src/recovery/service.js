@@ -6,6 +6,7 @@ const policy = require('./policy');
 const shopify = require('./shopify');
 const telephony = require('./telephony');
 const discounts = require('./discounts');
+const agentProfile = require('./agent-profile');
 const { TwirpError } = require('livekit-server-sdk');
 
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -48,6 +49,22 @@ async function saveSettings(customerId, shopId, input) {
         [shop.id, customerId, input.brand.trim(), input.brand_voice, JSON.stringify(nextRules), input.enabled, input.approval === true]);
         await event(client, shop.id, 'settings_saved', { enabled: input.enabled, rules: nextRules });
         return { saved: true };
+    });
+}
+
+async function updateAgentProfile(customerId, shopId, input, userId) {
+    const value = agentProfile.validate(input);
+    if (!/^[1-9][0-9]*$/.test(String(userId)) || !Number.isSafeInteger(Number(userId))) throw policy.problem('admin_required', 403);
+    return transaction(async (client) => {
+        const actor = await client.query(`SELECT u.id FROM platform_users u JOIN customers c ON c.id=u.customer_id
+            WHERE u.id=$1 AND u.customer_id=$2 AND u.role='admin' AND u.active AND c.is_active FOR SHARE OF u,c`,
+        [userId,customerId]);
+        if (!actor.rowCount) throw policy.problem('admin_required', 403);
+        const shop = await shopFor(customerId, shopId, client, true);
+        await client.query('UPDATE recovery_shops SET agent_profile=$3 WHERE id=$1 AND customer_id=$2',
+            [shop.id,customerId,JSON.stringify(value)]);
+        await event(client,shop.id,'agent_profile_saved',{ persona: value.persona,voice: value.voice,language: value.language });
+        return { agentProfile: agentProfile.forShop({ ...shop,agent_profile: value }) };
     });
 }
 
@@ -257,12 +274,12 @@ async function getContext(call) {
         const ctx = await state(db, shop, call.checkout_id);
         const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
-        return { brand: shop.brand, brandVoice: shop.brand_voice, identityRequired: true };
+        return { brand: shop.brand, brandVoice: shop.brand_voice, agentProfile: agentProfile.forShop(shop), identityRequired: true };
     }
     const ctx = await refresh(call.customer_id, call.shop_id, call.checkout_id);
     const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
-    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice,
+    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop),
         cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
             shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
         maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,
@@ -535,5 +552,5 @@ async function dashboard(customerId) {
     };
 }
 
-module.exports = { uuid, hash, shopFor, state, saveSettings, consent, upsertCheckout, syncShop, refresh, startCall,
+module.exports = { uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
     stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmIdentity, outcome, dashboard };

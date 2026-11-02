@@ -81,8 +81,11 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
 
-    def fixture(self, failure=None, finish='session'):
+    def fixture(self, failure=None, finish='session', profile=None):
         module = self.module
+        initial = {'brand': 'Synthetic shop', 'brandVoice': 'Friendly'}
+        if profile is not None:
+            initial['agentProfile'] = profile
         participant = SimpleNamespace(identity='synthetic-buyer', attributes={'sip.callStatus': 'active'})
         room = module.rtc.EventEmitter()
         room.remote_participants = {participant.identity: participant}
@@ -109,7 +112,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
             async def json(self):
                 if failure == 'context_malformed':
                     raise ValueError('synthetic malformed context')
-                return {'brand': 'Synthetic shop', 'brandVoice': 'Friendly'}
+                return initial
 
             async def text(self):
                 return '{"ended":true}'
@@ -119,6 +122,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
             closed = False
 
             def __init__(self):
+                self.initial = initial
                 self.requests = []
                 self.payloads = []
 
@@ -145,6 +149,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 self.close_calls = 0
                 self.greeting_calls = 0
                 self.start_options = None
+                self.greeting_options = None
 
             async def start(self, **options):
                 self.start_options = options
@@ -154,7 +159,8 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 if finish == 'during_start':
                     self.emit('close', None)
 
-            async def generate_reply(self, **_):
+            async def generate_reply(self, **options):
+                self.greeting_options = options
                 self.greeting_calls += 1
                 if failure == 'greeting':
                     raise RuntimeError('synthetic greeting failure')
@@ -192,6 +198,29 @@ class WorkerLifecycle(OfflineRecoveryCase):
             if model.called:
                 self.assertEqual(model.call_args.kwargs['base_url'],
                     os.environ.get('OPENAI_BASE_URL') or 'https://eu.api.openai.com/v1')
+                self.assertEqual(model.call_args.kwargs['voice'],self.module.profile_options(http.initial)['preset'])
+
+    async def test_profile_selects_fixed_language_voice_and_disclosed_founder_greeting(self):
+        voices = {'de': {'male': 'flitz','female': 'nuri'},'en': {'male': 'meridian','female': 'gleam'}}
+        for language, choices in voices.items():
+            for voice, preset in choices.items():
+                with self.subTest(language=language,voice=voice):
+                    greeting = ('Hallo, hier ist Alex, die KI-Assistenz im Auftrag des Gründungsteams von Synthetic shop.'
+                        if language=='de' else "Hi, I'm Alex, the AI assistant calling on behalf of the founding team at Synthetic shop.")
+                    profile = {'name': 'Alex','persona': 'founder','voice': voice,'language': language,'greeting': greeting}
+                    ctx,http,session = self.fixture(profile=profile)
+                    self.assertEqual(self.module.profile_options(http.initial)['preset'],preset)
+                    model = openai.realtime.GPTLiveModel(api_key='synthetic-offline-not-a-real-key',model='gpt-live-1',voice=preset)
+                    self.assertIsNotNone(model)
+                    agent = self.module.RecoveryAgent('synthetic-token',http.initial,http)
+                    self.assertIn('niemals ein Mensch',agent.instructions)
+                    self.assertIn('Sprich Deutsch.' if language=='de' else 'Speak English',agent.instructions)
+                    await self.run_fixture(ctx,http,session)
+                    self.assertIn(greeting,json.loads(session.greeting_options['instructions'].split(': ',1)[1]))
+        for change in [{'voice':'arbitrary-provider-voice'},{'persona':'human'},{'language':'fr'}]:
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(ValueError,'invalid_agent_profile'):
+                    self.module.profile_options({'agentProfile':{**profile,**change}})
 
     async def test_explicit_openai_endpoint_is_preserved(self):
         with patch.dict(os.environ, {'OPENAI_BASE_URL': 'https://us.api.openai.com/v1'}):
