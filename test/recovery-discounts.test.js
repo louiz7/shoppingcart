@@ -30,7 +30,8 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
             mutationCount++;
             if (mutationFailure) return mutationFailure();
             const value = variables.input,id = `gid://shopify/DiscountCodeNode/${serial++}`;
-            assert.equal(value.context.all,true); assert.equal(value.appliesOncePerCustomer,true);
+            // Shopify DiscountContextInput.all uses DiscountBuyerSelection; DiscountItemsInput.all remains Boolean.
+            assert.equal(value.context.all,'ALL'); assert.equal(value.appliesOncePerCustomer,true);
             assert.equal(value.customerGets.items.all,true);
             assert.deepEqual(value.combinesWith,{ orderDiscounts: false,productDiscounts: false,shippingDiscounts: false });
             const node = { id,codeDiscount: { __typename: 'DiscountCodeBasic',status: 'ACTIVE',startsAt: value.startsAt,endsAt: value.endsAt,

@@ -109,7 +109,7 @@ async function create(customerId, shopId, input) {
         const response = await shopify.graphql(shop, `mutation RecoveryMerchantDiscount($input:DiscountCodeBasicInput!) {
             discountCodeBasicCreate(basicCodeDiscount:$input) { codeDiscountNode { id } userErrors { field code message } }
         }`, { input: { title: row.title,code: row.code,startsAt: new Date().toISOString(),endsAt: new Date(row.expires_at).toISOString(),
-            context: { all: true }, customerGets: { value: { percentage: row.percent/100 }, items: { all: true } },
+            context: { all: 'ALL' }, customerGets: { value: { percentage: row.percent/100 }, items: { all: true } },
             minimumRequirement: { subtotal: { greaterThanOrEqualToSubtotal: (row.min_subtotal_cents/100).toFixed(2) } },
             usageLimit: row.usage_limit,appliesOncePerCustomer: true,
             combinesWith: { orderDiscounts: false,productDiscounts: false,shippingDiscounts: false } } });
