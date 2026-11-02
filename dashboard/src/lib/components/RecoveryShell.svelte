@@ -26,6 +26,9 @@
 </div>
 
 <style>
+	.recovery-shell{position:relative;isolation:isolate}
+	.recovery-shell::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:url('/images/graphite-ambient.jpg') center / 100% 100% no-repeat;opacity:.48}
+
 	:global(html:has(.recovery-shell)),:global(body:has(.recovery-shell)){background:#090909}
 	.recovery-shell{--ground:#090909;--surface:#111;--raised:#1a1a1a;--text:#f1f3f1;--muted:#a4aaa6;--border:#292929;--control:#454545;--accent:#b5e8c3;--negative:#ff8c93;color-scheme:dark;min-height:100svh;background:var(--ground);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;display:flex;flex-direction:column}
 	.recovery-shell :global(*){box-sizing:border-box}

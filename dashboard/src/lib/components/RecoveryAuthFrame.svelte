@@ -12,6 +12,9 @@
 </main>
 
 <style>
+	.auth-frame{position:relative;isolation:isolate}
+	.auth-frame::before{content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:url('/images/graphite-ambient.jpg') center / 100% 100% no-repeat;opacity:.48}
+
 	:global(html:has(.auth-frame)),:global(body:has(.auth-frame)){background:#090909}
 	.auth-frame{--text:#f1f3f1;--muted:#a4aaa6;--border:#292929;--control:#454545;--accent:#b5e8c3;color-scheme:dark;background:#090909;color:var(--text);min-height:100svh;padding:64px 20px 40px;display:flex;justify-content:center;font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5}
 	.auth-frame :global(*){box-sizing:border-box}.auth-column{width:min(100%,460px)}
