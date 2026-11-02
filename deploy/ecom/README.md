@@ -24,7 +24,7 @@ The receiver validates the archive and manifest, caps compressed and expanded si
 
 ## Configuration
 
-Keep `NODE_ENV=production`, `RECOVERY_ONLY=1`, `RECOVERY_API_URL` and `TOOL_GATEWAY_URL` set to `http://127.0.0.1:3610`. Nginx overwrites `X-Real-IP`; the dashboard uses `ADDRESS_HEADER=x-real-ip` for its durable authentication limits. Credentials stay on the server, never in Git or the release archive. New `.env` edits on a developer laptop do not automatically rotate server secrets.
+Keep `NODE_ENV=production`, `RECOVERY_ONLY=1`, `RECOVERY_API_URL` and `TOOL_GATEWAY_URL` set to `http://127.0.0.1:3610`. Nginx overwrites `X-Real-IP`; the dashboard uses `ADDRESS_HEADER=x-real-ip` for its durable authentication limits. Credentials stay on the server, never in Git or the release archive. New `.env` edits on a developer laptop do not automatically rotate server secrets. Recovery defaults to the EU OpenAI endpoint because this project requires EU residency; if `OPENAI_BASE_URL` is supplied, it must match the key’s project region. A global-endpoint HTTP 401 mentioning project geography is not a missing-model-permission error.
 
 The HTML document sets `Referrer-Policy` through a `same-origin` meta tag. This preserves native form origins for SvelteKit's CSRF checks and suppresses cross-origin referrers. Nginx's `no-referrer` remains the fallback for non-HTML responses; do not remove the document policy or disable CSRF to work around login failures.
 

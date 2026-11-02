@@ -198,6 +198,7 @@ async def entrypoint(ctx: agents.JobContext):
                 initial = await response.json()
             agent = RecoveryAgent(token, initial, http)
             session = AgentSession(llm=openai.realtime.GPTLiveModel(model='gpt-live-1', voice='flitz',
+                base_url=os.environ.get('OPENAI_BASE_URL') or 'https://eu.api.openai.com/v1',
                 responses_options={'model': os.environ.get('OPENAI_RECOVERY_BACKEND_MODEL', 'gpt-5.6-luna'),
                     'instructions': BACKEND_INSTRUCTIONS, 'parallel_tool_calls': False}))
             def session_closed(ev):

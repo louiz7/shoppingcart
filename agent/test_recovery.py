@@ -186,9 +186,16 @@ class WorkerLifecycle(OfflineRecoveryCase):
         # Every network-bearing SDK/HTTP boundary is replaced before entrypoint runs.
         with patch.object(self.module.aiohttp, 'ClientSession', return_value=http), \
                 patch.object(self.module.openai.realtime, 'GPTLiveModel', return_value=object(),
-                    side_effect=RuntimeError('synthetic model construction failure') if ctx.failure == 'model' else None), \
+                    side_effect=RuntimeError('synthetic model construction failure') if ctx.failure == 'model' else None) as model, \
                 patch.object(self.module, 'AgentSession', return_value=session):
             await asyncio.wait_for(self.module.entrypoint(ctx), 2)
+            if model.called:
+                self.assertEqual(model.call_args.kwargs['base_url'],
+                    os.environ.get('OPENAI_BASE_URL') or 'https://eu.api.openai.com/v1')
+
+    async def test_explicit_openai_endpoint_is_preserved(self):
+        with patch.dict(os.environ, {'OPENAI_BASE_URL': 'https://us.api.openai.com/v1'}):
+            await self.run_fixture(*self.fixture())
 
     async def test_startup_failures_and_preanswer_hangup_always_attempt_backend_cleanup(self):
         for failure in ['connect', 'sip_timeout', 'context_transport', 'context_denied',

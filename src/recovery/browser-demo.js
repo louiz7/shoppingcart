@@ -6,6 +6,8 @@ const { problem } = require('./policy');
 
 async function browserDemo(customerId, sdp) {
     if (process.env.GPT_LIVE_DEMO_ENABLED !== '1' || !process.env.OPENAI_API_KEY) throw problem('browser_demo_disabled', 409);
+    // The Recovery project requires EU residency; use the same endpoint as the voice worker.
+    const baseUrl = (process.env.OPENAI_BASE_URL || 'https://eu.api.openai.com/v1').replace(/\/+$/, '');
     if (typeof sdp !== 'string' || sdp.length < 16 || sdp.length > 60000 || !/^v=0\r?\n/.test(sdp)) throw problem('invalid_sdp');
     await transaction(async (client) => {
         // Tenant-wide persistent limit, including concurrent requests and failed upstream attempts.
@@ -17,7 +19,7 @@ async function browserDemo(customerId, sdp) {
         if (Number(rows[0].requests) >= 3) throw problem('demo_hourly_limit', 429);
         await event(client, rows[0].id, 'browser_demo_reserved');
     });
-    const response = await fetch('https://api.openai.com/v1/live/sessions', {
+    const response = await fetch(`${baseUrl}/live/sessions`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20000),
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ session: { model: 'gpt-live-1', instructions: ECOM_DEMO_INSTRUCTIONS,
@@ -30,8 +32,8 @@ async function browserDemo(customerId, sdp) {
     if (typeof payload.session?.id !== 'string' || typeof payload.transport?.sdp !== 'string') throw problem('invalid_live_response', 502);
     const sessionId = payload.session.id;
     const timer = setTimeout(() => {
-        fetch(`https://api.openai.com/v1/live/sessions/${encodeURIComponent(sessionId)}/hangup`, {
-            method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, signal: AbortSignal.timeout(10000),
+        fetch(`${baseUrl}/live/sessions/${encodeURIComponent(sessionId)}/hangup`, {
+            method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }, signal: AbortSignal.timeout(10000),
         }).catch(() => {});
     }, 180000);
     timer.unref();
