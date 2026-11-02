@@ -44,8 +44,95 @@ function encryptToken(accessToken) {
     if (key.length !== 32) throw problem('shopify_encryption_not_configured', 503);
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
     cipher.setAAD(Buffer.from('rescova-shopify-credentials:v1'));
-    const data = Buffer.concat([cipher.update(JSON.stringify({ access_token: accessToken })), cipher.final()]);
+    const data = Buffer.concat([cipher.update(JSON.stringify(typeof accessToken==='string' ? { access_token: accessToken } : accessToken)), cipher.final()]);
     return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), data.toString('base64url')].join('.');
+}
+
+function offlineCredentials(response, now=Date.now()) {
+    const token = (value) => typeof value==='string' && value.length>0 && value.length<=4096 && !/[\x00-\x20\x7f]/.test(value);
+    if (!token(response?.access_token) || !token(response?.refresh_token) || !Number.isSafeInteger(response.expires_in) || response.expires_in<=0 ||
+        !Number.isSafeInteger(response.refresh_token_expires_in) || response.refresh_token_expires_in<0 ||
+        !Number.isSafeInteger(now+response.expires_in*1000) || !Number.isSafeInteger(now+response.refresh_token_expires_in*1000)) {
+        throw problem('shopify_expiring_token_response_invalid',502);
+    }
+    return {access_token:response.access_token,refresh_token:response.refresh_token,
+        expires_at:new Date(now+response.expires_in*1000).toISOString(),
+        refresh_token_expires_at:new Date(now+response.refresh_token_expires_in*1000).toISOString(),
+        ...(typeof response.scope==='string' ? {scope:response.scope} : {})};
+}
+
+async function tokenRequest(shopDomain, body) {
+    domain(shopDomain);
+    if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) throw problem('shopify_app_not_configured',503);
+    let response;
+    try {
+        response=await fetch(`https://${shopDomain}/admin/oauth/access_token`,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
+            headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({
+                client_id:process.env.SHOPIFY_CLIENT_ID,client_secret:process.env.SHOPIFY_CLIENT_SECRET,...body}).toString()});
+    } catch { throw problem('shopify_token_service_unavailable',503); }
+    let payload;
+    try { payload=await response.json(); } catch { throw problem('shopify_token_response_invalid',502); }
+    if (!response.ok) {
+        if (response.status===401 || (response.status===400 && ['invalid_subject_token','invalid_grant','invalid_request'].includes(payload?.error))) {
+            throw problem('shopify_reauthorization_required',409);
+        }
+        if (response.status===403) throw problem('shopify_app_credentials_rejected',503);
+        throw problem('shopify_token_service_unavailable',503);
+    }
+    return offlineCredentials(payload);
+}
+
+async function withTokenLock(shopDomain, operation) {
+    domain(shopDomain);
+    return require('./store').transaction(async(client)=>{
+        await client.query('SELECT pg_advisory_xact_lock(20261103,hashtext($1))',[shopDomain]);
+        return operation(client);
+    });
+}
+
+const exchangeAuthorizationCode = (shopDomain, code) => tokenRequest(shopDomain,{code,expiring:'1'});
+
+function currentToken(credentials) {
+    return !credentials.reauthorization_required && typeof credentials.access_token==='string' && typeof credentials.refresh_token==='string' &&
+        Number.isFinite(Date.parse(credentials.expires_at)) && Date.parse(credentials.expires_at)>Date.now()+60000;
+}
+
+async function accessToken(shop) {
+    if (!shop.id) {
+        const credentials=decryptShopifyCredentials(shop.credentials_encrypted);
+        if (!currentToken(credentials)) throw problem('shopify_reauthorization_required',409);
+        return credentials.access_token;
+    }
+    const result=await withTokenLock(shop.domain,async(client)=>{
+        const {rows}=await client.query(`SELECT s.credentials_encrypted FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
+            WHERE s.id=$1 AND s.domain=$2 AND s.customer_id=$3 AND s.mode='live' AND c.is_active FOR UPDATE OF s`,[shop.id,shop.domain,shop.customer_id]);
+        if (!rows[0]?.credentials_encrypted) throw problem('shop_not_connected',409);
+        const credentials=decryptShopifyCredentials(rows[0].credentials_encrypted);
+        if (credentials.reauthorization_required) return {error:problem('shopify_reauthorization_required',409)};
+        if (currentToken(credentials)) return {token:credentials.access_token};
+        let updated;
+        try {
+            if (credentials.refresh_token) {
+                if (!Number.isFinite(Date.parse(credentials.refresh_token_expires_at)) || Date.parse(credentials.refresh_token_expires_at)<=Date.now()) {
+                    throw problem('shopify_reauthorization_required',409);
+                }
+                updated=await tokenRequest(shop.domain,{grant_type:'refresh_token',refresh_token:credentials.refresh_token});
+            } else if (credentials.access_token && !credentials.expires_at) {
+                updated=await tokenRequest(shop.domain,{grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',
+                    subject_token:credentials.access_token,subject_token_type:'urn:shopify:params:oauth:token-type:offline-access-token',
+                    requested_token_type:'urn:shopify:params:oauth:token-type:offline-access-token',expiring:'1'});
+            } else throw problem('shopify_reauthorization_required',409);
+        } catch(error) {
+            if (error.code!=='shopify_reauthorization_required') throw error;
+            await client.query(`UPDATE recovery_shops SET credentials_encrypted=$2,last_error=$3 WHERE id=$1`,
+                [shop.id,encryptToken({...credentials,reauthorization_required:true}),error.code]);
+            return {error};
+        }
+        await client.query('UPDATE recovery_shops SET credentials_encrypted=$2 WHERE id=$1',[shop.id,encryptToken(updated)]);
+        return {token:updated.access_token};
+    });
+    if (result.error) throw result.error;
+    return result.token;
 }
 
 function webhookCapability(shopId) {
@@ -75,7 +162,7 @@ async function registerWebhooks(shop) {
 async function graphql(shop, query, variables = {}) {
     domain(shop.domain);
     if (shop.mode !== 'live' || !shop.credentials_encrypted) throw problem('shop_not_connected', 409);
-    const token = decryptShopifyCredentials(shop.credentials_encrypted).access_token;
+    const token = await accessToken(shop);
     const response = await fetch(`https://${shop.domain}/admin/api/${VERSION}/graphql.json`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
         headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
@@ -185,4 +272,5 @@ async function orderStatus(shop, customerId) {
 }
 
 module.exports = { VERSION, SCOPES, FIELDS, domain, signature, oauthHmac, encryptToken,
-    graphql, normalizeCheckout, listCheckouts, refreshCheckout, createDiscount, orderStatus, webhookCapability, registerWebhooks };
+    graphql, normalizeCheckout, listCheckouts, refreshCheckout, createDiscount, orderStatus, webhookCapability, registerWebhooks,
+    offlineCredentials,withTokenLock,exchangeAuthorizationCode };

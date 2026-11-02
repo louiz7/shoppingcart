@@ -67,7 +67,7 @@ test('refresh verifies the exact checkout before returning its native URL and ne
         if (previousKey === undefined) delete process.env.SHOPIFY_CREDENTIALS_KEY;
         else process.env.SHOPIFY_CREDENTIALS_KEY = previousKey;
     });
-    const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken('synthetic-token') };
+    const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken(shopify.offlineCredentials({access_token:'synthetic-token',refresh_token:'synthetic-refresh',expires_in:3600,refresh_token_expires_in:86400})) };
     let node = checkout(), requests = 0;
     t.mock.method(global, 'fetch', async (url, options) => {
         requests++;
@@ -95,7 +95,7 @@ test('redacted Shopify phone fields report the required access without accepting
         if (previousKey === undefined) delete process.env.SHOPIFY_CREDENTIALS_KEY;
         else process.env.SHOPIFY_CREDENTIALS_KEY = previousKey;
     });
-    const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken('synthetic-token') };
+    const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken(shopify.offlineCredentials({access_token:'synthetic-token',refresh_token:'synthetic-refresh',expires_in:3600,refresh_token_expires_in:86400})) };
     let errors = [{ message: 'Sensitive provider message must not be forwarded', extensions: { code: 'ACCESS_DENIED' },
         path: ['abandonedCheckouts', 'nodes', 0, 'customer', 'phone'] }];
     t.mock.method(global, 'fetch', async () => Response.json({ data: { abandonedCheckouts: {

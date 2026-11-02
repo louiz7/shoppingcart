@@ -2,7 +2,7 @@
 
 const express = require('express');
 const { randomBytes, randomUUID, timingSafeEqual } = require('node:crypto');
-const { db, transaction, event } = require('./store');
+const { db, event } = require('./store');
 const service = require('./service');
 const shopify = require('./shopify');
 const policy = require('./policy');
@@ -54,21 +54,15 @@ oauthRouter.get('/callback', handle(async (req, res) => {
     const { rows } = await db.query(`DELETE FROM recovery_oauth_states WHERE state_hash=$1 AND shop_domain=$2
         AND expires_at>NOW() RETURNING customer_id`, [service.hash(params.get('state')), shopDomain]);
     if (!rows[0]) throw policy.problem('invalid_oauth_state', 401);
-    const response = await fetch(`https://${shopDomain}/admin/oauth/access_token`, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: process.env.SHOPIFY_CLIENT_ID, client_secret: process.env.SHOPIFY_CLIENT_SECRET, code: params.get('code') }),
-    });
-    if (!response.ok) throw policy.problem('shopify_token_exchange_failed', 502);
-    const token = await response.json();
-    const scopes = String(token.scope || '').split(',').map((scope) => scope.trim());
-    if (!token.access_token || shopify.SCOPES.some((s) => !scopes.includes(s))) throw policy.problem('shopify_scopes_missing', 409);
-    const shop = { domain: shopDomain, mode: 'live', credentials_encrypted: shopify.encryptToken(token.access_token) };
-    const info = await shopify.graphql(shop, 'query RecoveryShop { shop { name primaryDomain { host } currencyCode } }');
-    if (!['EUR','USD'].includes(info.shop.currencyCode)) throw policy.problem('unsupported_shop_currency', 409);
-    const savedShop = await transaction(async (client) => {
+    const savedShop = await shopify.withTokenLock(shopDomain,async (client) => {
         const prior = await client.query('SELECT customer_id,currency FROM recovery_shops WHERE domain=$1 FOR UPDATE', [shopDomain]);
         if (prior.rows[0] && prior.rows[0].customer_id !== rows[0].customer_id) throw policy.problem('shop_already_connected', 409);
+        const token=await shopify.exchangeAuthorizationCode(shopDomain,params.get('code'));
+        const scopes=String(token.scope || '').split(',').map((scope)=>scope.trim());
+        if (shopify.SCOPES.some((scope)=>!scopes.includes(scope))) throw policy.problem('shopify_scopes_missing',409);
+        const shop={domain:shopDomain,mode:'live',credentials_encrypted:shopify.encryptToken(token)};
+        const info=await shopify.graphql(shop,'query RecoveryShop { shop { name primaryDomain { host } currencyCode } }');
+        if (!['EUR','USD'].includes(info.shop.currencyCode)) throw policy.problem('unsupported_shop_currency',409);
         if (prior.rows[0] && prior.rows[0].currency !== info.shop.currencyCode) throw policy.problem('shop_currency_changed', 409);
         const saved = await client.query(`INSERT INTO recovery_shops(id,customer_id,domain,storefront_domain,brand,mode,credentials_encrypted,scopes,currency)
             VALUES($1,$2,$3,$4,$5,'live',$6,$7,$8) ON CONFLICT(domain) DO UPDATE SET

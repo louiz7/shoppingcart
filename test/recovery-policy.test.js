@@ -24,7 +24,7 @@ test('Shopify pagination uses a supported checkout sort key and forwards cursors
             pageInfo: { hasNextPage: requests === 1, endCursor: 'next-page' } } } });
     });
     const rows = await shopify.listCheckouts({ domain: 'synthetic.myshopify.com', mode: 'live',
-        credentials_encrypted: shopify.encryptToken('synthetic-token') });
+        credentials_encrypted: shopify.encryptToken(shopify.offlineCredentials({access_token:'synthetic-token',refresh_token:'synthetic-refresh',expires_in:3600,refresh_token_expires_in:86400})) });
     assert.deepEqual(rows, [{ id: '1' }, { id: '2' }]);
 });
 
