@@ -285,6 +285,58 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.ok(hangup.mock.calls.length > 0);
     });
 
+    await t.test('blocklist survives new carts, phone formatting, imports and retention without crossing shops', async () => {
+        const f = await fixture(); await activate(f); const call = await fakeCall(f);
+        const pending = randomUUID();
+        await db.query("INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'sms','pending','{}')",[pending,f.checkoutId]);
+        await s.stopContact(f.customerId,f.shopId,f.checkoutId,'spoken_opt_out',call.id);
+        const before = (await db.query('SELECT stopped_at,stop_reason FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0];
+        await s.stopContact(f.customerId,f.shopId,f.checkoutId,'merchant_stop');
+        await db.query("UPDATE recovery_calls SET status='ended',ended_at=NOW() WHERE id=$1",[call.id]);
+        assert.deepEqual((await db.query('SELECT stopped_at,stop_reason FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0],before);
+        assert.equal((await db.query('SELECT status FROM recovery_actions WHERE id=$1',[pending])).rows[0].status,'failed');
+        await db.query("UPDATE recovery_checkouts SET source_updated_at=NOW()-INTERVAL '40 days' WHERE shop_id=$1",[f.shopId]);
+        await require('../src/recovery/worker').purgeExpiredData(f.shopId);
+        assert.equal((await db.query('SELECT phone FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0].phone,'');
+        const next = {...f.snapshot,id:'gid://shopify/AbandonedCheckout/987',phone:'+49 (000) 000-00001',email:'different@example.invalid'};
+        await transaction(c=>s.upsertCheckout(c,f.shop,next));
+        await transaction(c=>s.upsertCheckout(c,f.shop,next));
+        const saved=(await db.query('SELECT id,status,phone FROM recovery_checkouts WHERE shop_id=$1 AND external_id=$2',[f.shopId,next.id])).rows[0];
+        assert.equal(saved.status,'stopped');assert.equal(saved.phone,f.snapshot.phone);
+        assert.equal((await db.query('SELECT count(*)::int n FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0].n,1);
+        await assert.rejects(s.consent(f.customerId,f.shopId,saved.id,{verified:true,evidence:'New checkout cannot override a prior contact opt out',
+            consentedAt:new Date(Date.now()-1000).toISOString(),expiresAt:new Date(Date.now()+86400000).toISOString(),timezone:'Europe/Berlin'}),/contact_stopped/);
+        await assert.rejects(s.startCall(f.customerId,f.shopId,saved.id),/contact_stopped/);
+        const laterCall=await fakeCall({...f,checkoutId:saved.id});
+        await assert.rejects(s.sendLink(laterCall,false,randomUUID()),/contact_stopped/);
+        const other=await fixture();await activate(other);
+        const otherState=await s.state(db,await s.shopFor(other.customerId,other.shopId),other.checkoutId);
+        assert.equal(otherState.contact.stopped_at,null);
+        assert.equal(p.eligibility(otherState,new Date(),'action'),null);
+    });
+
+    for (const viaOutcome of [false,true]) await t.test(`spoken stop follows the called number after checkout phone changes (outcome=${viaOutcome})`, async () => {
+        const f=await fixture();await activate(f);const call=await fakeCall(f);
+        const originalKey=p.contactKey(f.shopId,f.snapshot.phone);
+        const changed={...f.snapshot,phone:'+4900000000002',updatedAt:new Date().toISOString()};
+        await transaction(c=>s.upsertCheckout(c,f.shop,changed));
+        const other=await fixture();const otherCall=await fakeCall(other);
+        await assert.rejects(s.stopContact(f.customerId,f.shopId,f.checkoutId,'agent_stop',otherCall.id),/invalid_call_token/);
+        const before=hangup.mock.calls.length;
+        if(viaOutcome) await s.outcome(call,{outcome:'refused',summary:'Do not contact me again.'});
+        else await s.stopContact(f.customerId,f.shopId,f.checkoutId,'agent_stop',call.id);
+        const contacts=(await db.query('SELECT contact_key,stopped_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows;
+        assert.ok(contacts.find(c=>c.contact_key===originalKey).stopped_at);
+        assert.equal(contacts.find(c=>c.contact_key!==originalKey).stopped_at,null);
+        assert.equal((await db.query('SELECT status FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].status,'pending');
+        assert.equal(hangup.mock.calls.length,before+1);
+        assert.equal(hangup.mock.calls.at(-1).arguments[0],`recovery-${call.id}`);
+        await transaction(c=>s.upsertCheckout(c,f.shop,{...f.snapshot,id:'gid://shopify/AbandonedCheckout/988'}));
+        const next=(await db.query('SELECT id,status FROM recovery_checkouts WHERE shop_id=$1 AND external_id=$2',[f.shopId,'gid://shopify/AbandonedCheckout/988'])).rows[0];
+        assert.equal(next.status,'stopped');
+        await assert.rejects(s.startCall(f.customerId,f.shopId,next.id),/contact_stopped/);
+    });
+
     await t.test('product information stays hidden until conversation permission is grounded in transcripts', async () => {
         const f = await fixture(); await activate(f); const call = { ...await fakeCall(f), identity_verified: false };
         await db.query('UPDATE recovery_calls SET identity_verified=FALSE WHERE id=$1',[call.id]);

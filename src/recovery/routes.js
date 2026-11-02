@@ -131,7 +131,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call, req.body.useDiscount, req.body.userEventId, req.body.preparedCheckoutId); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
-    case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop'); break;
+    case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop', call.id); break;
     case 'outcome': result = await service.outcome(call, req.body); break;
     case 'order_status': {
         if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);

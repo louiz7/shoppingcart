@@ -109,6 +109,9 @@ async function upsertCheckout(client, shop, snapshot, token = null) {
         FROM recovery_orders o WHERE c.shop_id=$1 AND o.shop_id=c.shop_id AND
         ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR
          (o.checkout_external_id=c.external_id) OR (o.phone=c.phone AND o.ordered_at >= c.source_updated_at))`, [shop.id]);
+    await client.query(`UPDATE recovery_checkouts c SET status='stopped' FROM recovery_contacts p
+        WHERE c.shop_id=$1 AND c.external_id=$2 AND p.shop_id=c.shop_id AND p.contact_key=c.contact_key
+        AND p.stopped_at IS NOT NULL AND c.completed_at IS NULL AND c.status!='converted'`, [shop.id,snapshot.id]);
 }
 
 async function syncShop(customerId, shopId) {
@@ -218,19 +221,30 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
     }
 }
 
-async function stopContact(customerId, shopId, checkoutId, reason = 'merchant_stop') {
+async function stopContact(customerId, shopId, checkoutId, reason = 'merchant_stop', callId = null) {
+    if (callId !== null && !uuid(callId)) throw policy.problem('invalid_call_token',401);
     const rooms = await transaction(async (client) => {
         const shop = await shopFor(customerId, shopId, client, true);
         const ctx = await state(client, shop, checkoutId, true);
-        if (ctx.contact) await client.query(`UPDATE recovery_contacts SET stopped_at=COALESCE(stopped_at,NOW()),
-            revoked_at=COALESCE(revoked_at,NOW()),stop_reason=$3 WHERE shop_id=$1 AND contact_key=$2`,
-        [shop.id, ctx.contact.contact_key, String(reason).slice(0, 100)]);
+        let contactKey = ctx.checkout.contact_key;
+        if (callId !== null) {
+            // A checkout phone can change during a call; opt-out belongs to the number actually called.
+            const { rows } = await client.query(`SELECT contact_key FROM recovery_calls
+                WHERE id=$1 AND shop_id=$2 AND checkout_id=$3`, [callId,shop.id,checkoutId]);
+            if (!rows[0]) throw policy.problem('invalid_call_token',401);
+            contactKey = rows[0].contact_key;
+        }
+        if (contactKey) await client.query(`UPDATE recovery_contacts SET stopped_at=COALESCE(stopped_at,NOW()),
+            revoked_at=COALESCE(revoked_at,NOW()),stop_reason=COALESCE(stop_reason,$3) WHERE shop_id=$1 AND contact_key=$2`,
+        [shop.id, contactKey, String(reason).slice(0, 100)]);
         await client.query(`UPDATE recovery_checkouts SET status='stopped' WHERE shop_id=$1 AND
-            (contact_key=$2 OR id=$3) AND status!='converted'`, [shop.id, ctx.checkout.contact_key, checkoutId]);
+            (contact_key=$2 OR ($4::boolean AND id=$3)) AND status!='converted'`, [shop.id, contactKey, checkoutId, callId === null]);
         await client.query(`UPDATE recovery_actions SET status='failed' WHERE status='pending' AND checkout_id IN
-            (SELECT id FROM recovery_checkouts WHERE shop_id=$1 AND (contact_key=$2 OR id=$3))`, [shop.id, ctx.checkout.contact_key, checkoutId]);
-        await event(client, shop.id, 'contact_stopped', { checkoutId, reason: String(reason).slice(0, 100) });
-        return ctx.attempts.filter((a) => ['reserved', 'dialing', 'connected', 'unknown'].includes(a.status)).map((a) => `recovery-${a.id}`);
+            (SELECT id FROM recovery_checkouts WHERE shop_id=$1 AND (contact_key=$2 OR id=$3))`, [shop.id, contactKey, checkoutId]);
+        await event(client, shop.id, 'contact_stopped', { checkoutId, contactKey, reason: String(reason).slice(0, 100) }, callId);
+        const { rows: active } = await client.query(`SELECT id FROM recovery_calls WHERE shop_id=$1 AND contact_key=$2
+            AND status IN ('reserved','dialing','connected','unknown')`, [shop.id,contactKey]);
+        return active.map((a) => `recovery-${a.id}`);
     });
     const results = await Promise.allSettled(rooms.map(telephony.hangup));
     return { stopped: true, hangupPending: results.some((r) => r.status === 'rejected') };
@@ -539,7 +553,7 @@ async function confirmContact(call, userEventId) {
 async function outcome(call, input) {
     if (!['interested', 'refused', 'wrong_person', 'voicemail', 'purchased_claimed', 'human_needed', 'no_answer'].includes(input.outcome) ||
         typeof input.summary !== 'string' || input.summary.length > 1000) throw policy.problem('invalid_outcome');
-    if (['refused', 'wrong_person'].includes(input.outcome)) await stopContact(call.customer_id, call.shop_id, call.checkout_id, input.outcome);
+    if (['refused', 'wrong_person'].includes(input.outcome)) await stopContact(call.customer_id, call.shop_id, call.checkout_id, input.outcome, call.id);
     await db.query(`UPDATE recovery_calls SET outcome=$2,summary=$3 WHERE id=$1`, [call.id, input.outcome, input.summary]);
     return { recorded: true, purchaseConfirmed: false };
 }

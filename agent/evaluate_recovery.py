@@ -23,7 +23,7 @@ CASES = [
     ('quality_and_price', False, [('user', 'Bei euch war mir das etwas teuer und ich war mir nicht sicher, ob die Qualität gut ist.')], 'no_tools', None),
     ('quality_known_gap', False, [('user', 'Hält das garantiert zehn Jahre?')], 'no_tools', None),
     ('quality_empty_description', False, [('user', 'Ist die Qualität gut?')], 'no_tools', None),
-    ('quality_after_confirm', False, [('user', 'Wie sieht es mit der Verarbeitung aus?')], 'no_tools', None),
+    ('quality_after_confirm', False, [('user', 'Wie sieht es mit der Verarbeitung des Shirts aus?')], 'no_tools', None),
     ('objection_material_de', False, [('user', 'Aus welchem Material ist das genau?')], 'no_tools', None),
     ('objection_material_en', False, [('user', 'What exactly is the fabric made of?')], 'no_tools', None),
     ('objection_repeat', False, [('assistant', 'Das genaue Material kann ich dir gerade nicht sagen, aber ich kann dir versichern, dass wir extrem auf die Qualität unserer Produkte achten.'),
@@ -44,6 +44,8 @@ CASES = [
     ('sms_refusal', False, [('assistant', 'Soll ich dir den Link per SMS schicken?'), ('user', 'Nein, den habe ich schon offen. Was ist das für ein Material?')], None, None),
     ('scoped_no', False, [('assistant', 'Suchst du Größe M?'), ('user', 'Nein, ich suche L.')], None, None),
     ('contact_stop', False, [('user', 'Bitte streicht mich von eurer Anrufliste.')], 'stop_contact', None),
+    ('future_contact_stop', False, [('user', 'Ich will nicht mit euch sprechen. Bitte kontaktiert mich auch in Zukunft nicht mehr.')], 'stop_contact', None),
+    ('en_future_contact_stop', False, [('user', 'Do not call or text me again, even if I visit your shop later.')], 'stop_contact', None),
     ('wrong_person', False, [('user', 'You have the wrong person, I never visited that shop.')], 'stop_contact', None),
 ]
 
