@@ -22,23 +22,22 @@
 		</div>
 	</header>
 	<main class="app-main">{@render children()}</main>
-	<footer>Persönliche Gespräche. Zurück zum Warenkorb.</footer>
+	<footer><span>Persönliche Gespräche. Zurück zum Warenkorb.</span><a href="mailto:support@rescova.de">Support kontaktieren <span aria-hidden="true">↗</span></a></footer>
 </div>
 
 <style>
-	:global(html:has(.recovery-shell)),:global(body:has(.recovery-shell)){background:#f5f7f5}
-	.recovery-shell{--ground:#f5f7f5;--surface:#fff;--raised:#f0f3f0;--text:#17211b;--muted:#5e6861;--border:#e2e7e2;--control:#cbd3cd;--accent:#28623c;--negative:#a52c32;min-height:100svh;background:var(--ground);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;display:flex;flex-direction:column}
+	:global(html:has(.recovery-shell)),:global(body:has(.recovery-shell)){background:#090909}
+	.recovery-shell{--ground:#090909;--surface:#111;--raised:#1a1a1a;--text:#f1f3f1;--muted:#a4aaa6;--border:#292929;--control:#454545;--accent:#b5e8c3;--negative:#ff8c93;color-scheme:dark;min-height:100svh;background:var(--ground);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px;line-height:1.5;display:flex;flex-direction:column}
 	.recovery-shell :global(*){box-sizing:border-box}
-	.app-header{border-bottom:1px solid var(--border)}
-	.header-inner,.app-main,footer{width:min(1088px,calc(100% - 80px));margin-inline:auto}
-	.header-inner{min-height:80px;display:flex;align-items:center;gap:56px}
+	.header-inner,.app-main,footer{width:min(1184px,calc(100% - 48px));margin-inline:auto}
+	.header-inner{min-height:88px;display:flex;align-items:center;gap:56px;padding-inline:32px}
 	.wordmark{display:inline-flex;align-items:center;gap:9px;text-decoration:none;color:var(--text);font-size:23px;font-weight:600;letter-spacing:-.8px;flex:none}
 	.wordmark svg{width:23px;height:23px;margin-right:2px;color:var(--accent)}.wordmark span{margin-left:-8px;color:var(--accent)}
 	.brand-block{display:flex;flex-direction:column;justify-content:center;gap:2px;padding-block:12px;min-width:0;flex:none}.organization-name{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}
-	nav{display:flex;align-self:stretch;gap:28px}nav a{display:flex;align-items:center;position:relative;min-height:44px;color:var(--muted);text-decoration:none;font-size:13px}nav a[aria-current='page']{color:var(--text);font-weight:500}nav a[aria-current='page']::after{content:'';height:2px;background:var(--text);position:absolute;inset:auto 0 -1px}nav a:hover{color:var(--text)}
+	nav{display:flex;align-self:stretch;gap:28px}nav a{display:flex;align-items:center;position:relative;min-height:44px;color:var(--muted);text-decoration:none;font-size:13px}nav a[aria-current='page']{color:var(--text);font-weight:500}nav a[aria-current='page']::after{content:'';height:2px;background:var(--text);position:absolute;inset:auto 0 12px}nav a:hover{color:var(--text)}
 	.header-inner form{margin-left:auto}.logout{min-height:44px;border:0;background:none;color:var(--muted);padding:8px 0 8px 16px;font:inherit;font-size:13px;cursor:pointer}.logout:hover{color:var(--text)}
-	.app-main{padding-block:44px 32px}footer{padding-block:24px 32px;font-size:13px;color:var(--muted)}
+	.app-main{padding:32px;background:var(--surface);border:1px solid transparent;border-radius:16px}footer{padding:24px 32px 32px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:16px}footer a{color:var(--muted);text-decoration:none}footer a:hover{color:var(--text);text-decoration:underline;text-underline-offset:4px}footer a span{margin-left:6px}
 	a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
-	@media(max-width:768px){.header-inner,.app-main,footer{width:calc(100% - 40px)}.header-inner{gap:32px}.app-main{padding-top:32px}}
-	@media(max-width:640px){.header-inner{min-height:0;display:grid;grid-template-columns:1fr auto;gap:0}.brand-block{min-height:76px}.header-inner form{grid-column:2;grid-row:1}nav{grid-column:1/-1;grid-row:2;gap:24px}nav a{min-height:48px}.app-main{padding-top:28px}footer{padding-block:20px 28px}}
+	@media(max-width:768px){.header-inner,.app-main,footer{width:calc(100% - 32px)}.header-inner{gap:32px;padding-inline:24px}.app-main{padding:24px}footer{padding-inline:24px}}
+	@media(max-width:640px){.header-inner{min-height:0;display:grid;grid-template-columns:1fr auto;gap:0;padding-inline:4px}.brand-block{min-height:76px}.header-inner form{grid-column:2;grid-row:1}nav{grid-column:1/-1;grid-row:2;gap:24px;margin-bottom:16px}nav a{min-height:44px}.app-main{padding:20px}.organization-name{max-width:190px}footer{padding:20px 4px 28px;flex-direction:column;gap:4px}footer a{display:inline-flex;align-items:center;min-height:44px}}
 </style>

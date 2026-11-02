@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import RecoveryShell from '$lib/components/RecoveryShell.svelte';
+	import RecoveryJourney from '$lib/components/RecoveryJourney.svelte';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
@@ -49,7 +50,7 @@
 			{#if shops.length > 1}
 				<label class="shop-choice">Shop<select bind:value={selectedShop} aria-label="Shop auswählen"><option value="">{shops[0].brand}</option>{#each shops.slice(1) as item}<option value={item.id}>{item.brand}</option>{/each}</select></label>
 			{:else}
-				<p class="shop-name">{shop?.brand || 'Dein Shop'}</p>
+				<p class="shop-name">{shop?.brand || 'Dein Arbeitsbereich'}</p>
 			{/if}
 			<p class="shop-domain">{shop?.domain || ''}</p>
 		</div>
@@ -75,20 +76,38 @@
 			{#if failed}<div class="metric-error" role="alert"><span>{data.loadError || 'Die Aktualisierung ist fehlgeschlagen.'}</span><button onclick={refresh} disabled={refreshing}>Erneut versuchen</button></div>{/if}
 		</section>
 		<div class="freshness"><span>{updated ? `Stand ${updated} Uhr` : 'Noch kein Datenstand'} · {zone}</span><span>Aktualisiert sich automatisch</span></div>
-		<p class="attribution">Abschlüsse werden heute gezählt, wenn Shopify die Zahlung für den ursprünglichen Warenkorb nach einem verbundenen Gespräch innerhalb von 7 Tagen bestätigt.</p>
+		{#if !failed}
+			<section class="recovery-story" aria-labelledby="journey-heading">
+				<div class="story-copy">
+					<h2 id="journey-heading">{shop ? 'Ein Gespräch kann den Unterschied machen.' : 'Dein Shop. Deine Stimme.'}</h2>
+					<p>{shop ? 'Produktfragen klären, Kaufhindernisse verstehen und auf Wunsch den passenden Checkout-Link senden.' : 'Verbinde Shopify und gestalte deinen persönlichen KI-Agenten. Name, Stimme und Angebote passen zu deinem Shop.'}</p>
+					<a class="story-action" href={shop ? '/recovery/settings#agent-heading' : '/recovery/settings#connect-heading'}>{shop ? 'Agenten gestalten' : 'Shopify verbinden'}<span aria-hidden="true">→</span></a>
+					{#if !shop}<span class="activation-note">Du entscheidest, wann die Anrufe starten.</span>{/if}
+				</div>
+				<div class="journey-art"><RecoveryJourney /></div>
+			</section>
+		{/if}
+		<div class="detail-grid">
+			<section class="measurement" aria-labelledby="measurement-heading"><h2 id="measurement-heading">Wann zählt ein Abschluss?</h2><p>Shopify bestätigt die Zahlung für den ursprünglichen Warenkorb innerhalb von 7 Tagen nach einem verbundenen Gespräch. Dann erscheint der Abschluss hier am Tag der Zahlungsbestätigung.</p></section>
+			<a class="settings-shortcut" href={shop ? "/recovery/settings#discount-heading" : "/recovery/settings#connect-heading"}><div><h2>Angebote, die zu dir passen</h2><p>Rabattcodes und deinen Agenten in den Einstellungen verwalten.</p></div><span aria-hidden="true">↗</span></a>
+		</div>
 	</div>
 </RecoveryShell>
 
 <style>
-	.overview{padding-bottom:12px}
+	.overview{padding-bottom:0}
 	button,select{font:inherit}button{cursor:pointer}button:disabled{cursor:wait}
-	.scope-row{display:flex;align-items:baseline;gap:12px;margin-bottom:24px;flex-wrap:wrap}.scope-row p{margin:0}.shop-name{font-weight:500}.shop-domain{font-size:13px;color:var(--muted)}
+	.scope-row{display:flex;align-items:baseline;gap:12px;margin-bottom:24px;flex-wrap:wrap}.scope-row p{margin:0}.shop-name{font-weight:500}.shop-domain{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 	.shop-choice{display:flex;align-items:center;gap:12px;font-size:13px}.shop-choice select{height:40px;padding:0 32px 0 12px;background:var(--surface);border:1px solid var(--control);border-radius:6px;color:var(--text);max-width:100%}
 	.title-row{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:24px}h1{font-size:24px;line-height:1.3;letter-spacing:-.6px;font-weight:600;margin:0}.date{margin:8px 0 0;color:var(--muted);font-size:14px}
-	.refresh{height:44px;padding:0 16px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--text);color:var(--surface);border:1px solid var(--text);border-radius:6px;flex:none;font-size:13px;min-width:146px}.refresh svg{width:17px;height:17px}.refresh:hover:not(:disabled){background:#303d34}.refresh:disabled{color:#d2dad4}
-	.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden}.metric{padding:32px 36px}.metric+.metric{border-left:1px solid var(--border)}h2{margin:0;font-size:14px;font-weight:500;color:var(--muted)}.figure{font-size:40px;line-height:1.2;font-weight:400;font-variant-numeric:tabular-nums;letter-spacing:-1px;margin:20px 0 12px}.figure.positive{color:var(--accent)}.figure.missing{font-size:24px;line-height:48px;color:var(--muted);letter-spacing:0}.definition{margin:0;color:var(--muted);font-size:13px}
-	.freshness{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}.attribution{max-width:760px;color:var(--muted);font-size:13px;line-height:1.7;margin:24px 0 0}.metric-error{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid var(--border);padding:16px 32px;font-size:13px;color:var(--muted)}.metric-error button{min-height:44px;color:var(--text);background:none;border:0;text-decoration:underline;font-size:13px;flex:none}
-	button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+	.refresh{height:44px;padding:0 16px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--surface);color:var(--text);border:1px solid var(--control);border-radius:6px;flex:none;font-size:13px;min-width:146px}.refresh svg{width:17px;height:17px}.refresh:hover:not(:disabled){background:var(--raised)}.refresh:disabled{color:var(--muted)}
+	.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid transparent;border-radius:8px;background:var(--raised);overflow:hidden}.metric{padding:32px 36px}.metric+.metric{border-left:1px solid var(--border)}h2{margin:0;font-size:14px;font-weight:500;color:var(--muted)}.figure{font-size:40px;line-height:1.2;font-weight:400;font-variant-numeric:tabular-nums;letter-spacing:-1px;margin:20px 0 12px}.figure.positive{color:var(--accent)}.figure.missing{font-size:24px;line-height:48px;color:var(--muted);letter-spacing:0}.definition{margin:0;color:var(--muted);font-size:13px}
+	.freshness{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}.metric-error{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;border-top:1px solid var(--border);padding:16px 32px;font-size:13px;color:var(--muted)}.metric-error button{min-height:44px;color:var(--text);background:none;border:0;text-decoration:underline;font-size:13px;flex:none}
+	/* 2 × 547px + 24px gap = 1118px inner canvas at the maximum shell width. */
+	.recovery-story{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:24px;margin-top:32px;padding:28px 32px;background:var(--raised);border-radius:8px}.story-copy h2{font-size:20px;line-height:1.35;letter-spacing:-.3px;color:var(--text);max-width:320px}.story-copy>p{color:var(--muted);font-size:14px;line-height:1.7;max-width:380px;margin:12px 0 16px}.story-action{display:inline-flex;align-items:center;justify-content:space-between;gap:28px;min-height:44px;padding:10px 16px;background:var(--text);color:var(--surface);border-radius:6px;font-size:13px;text-decoration:none}.story-action:hover{background:#d9e1db}.story-action span{font-size:18px;line-height:1}.activation-note{display:block;color:var(--muted);font-size:12px;margin-top:12px}.journey-art{display:flex;justify-content:center;min-width:0}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin-top:28px}.detail-grid h2{color:var(--text);font-size:14px;font-weight:500;margin:0}.detail-grid p{font-size:13px;color:var(--muted);line-height:1.7;margin:8px 0 0}.settings-shortcut{display:flex;gap:24px;justify-content:space-between;text-decoration:none;color:var(--text);border-left:1px solid var(--border);padding-left:32px}.settings-shortcut>span{font-size:22px;flex:none}.settings-shortcut:hover h2{text-decoration:underline;text-underline-offset:4px}
+	a:focus-visible,button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
 	@media(max-width:768px){.metric{padding:28px}.shop-domain{overflow-wrap:anywhere}}
-	@media(max-width:480px){.scope-row{margin-bottom:24px;gap:4px;flex-direction:column}.title-row{align-items:flex-start;gap:16px;flex-wrap:wrap}.refresh{min-width:0;min-height:44px}h1{font-size:22px}.date{font-size:13px}.metrics{grid-template-columns:1fr}.metric{padding:24px}.metric+.metric{border-left:0;border-top:1px solid var(--border)}.figure{font-size:36px}.metric-error{padding:16px 24px;flex-direction:column;align-items:flex-start;gap:0}.freshness{font-size:13px}.freshness span:last-child{display:none}}
+	@media(max-width:640px){.recovery-story{grid-template-columns:1fr;padding:24px;gap:20px}.journey-art{grid-row:1}.story-copy h2{font-size:18px}.story-copy>p{font-size:14px}.detail-grid{grid-template-columns:1fr;gap:24px}.settings-shortcut{border-left:0;border-top:1px solid var(--border);padding:20px 0 0}.scope-row{margin-bottom:24px;gap:4px;flex-direction:column}.title-row{align-items:flex-start;gap:16px;flex-wrap:wrap}.refresh{min-width:0;min-height:44px}h1{font-size:22px}.date{font-size:13px}.metric{padding:20px}.figure{font-size:36px}.definition{font-size:12px}.metric-error{padding:16px 20px;flex-direction:column;align-items:flex-start;gap:0}.freshness span:last-child{display:none}}
+	@media(min-width:381px) and (max-width:640px){.metric h2{min-height:42px}}
+	@media(max-width:380px){.metrics{grid-template-columns:1fr}.metric+.metric{border-left:0;border-top:1px solid var(--border)}}
 </style>
