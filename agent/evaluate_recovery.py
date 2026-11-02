@@ -18,6 +18,12 @@ from recovery import backend_options, RecoveryAgent
 CASES = [
     ('known_price', False, [('user', 'Wie viel kostet das Shirt nochmal?')], 'no_tools', None),
     ('known_material', False, [('user', 'Ist das denn Baumwolle?')], 'no_tools', None),
+    ('quality_general_de', False, [('user', 'Ich bin mir unsicher, ob die Qualität bei euch gut ist.')], 'no_tools', None),
+    ('quality_general_en', False, [('user', 'Is your stuff actually good quality?')], 'no_tools', None),
+    ('quality_and_price', False, [('user', 'Bei euch war mir das etwas teuer und ich war mir nicht sicher, ob die Qualität gut ist.')], 'no_tools', None),
+    ('quality_known_gap', False, [('user', 'Hält das garantiert zehn Jahre?')], 'no_tools', None),
+    ('quality_empty_description', False, [('user', 'Ist die Qualität gut?')], 'no_tools', None),
+    ('quality_after_confirm', False, [('user', 'Wie sieht es mit der Verarbeitung aus?')], 'no_tools', None),
     ('de_sms_natural', False, [('assistant', 'Soll ich dir den Link per SMS schicken?'), ('user', 'Das wäre super.')], 'send_checkout_link', False),
     ('en_sms_natural', False, [('assistant', 'Would you like the checkout link by text?'), ('user', 'Please do.')], 'send_checkout_link', False),
     ('ready_buyer', False, [('user', 'Ich brauche keine Beratung, schick mir einfach den Checkout per SMS.')], 'send_checkout_link', False),
@@ -56,8 +62,13 @@ async def main():
                            timeout=45, max_retries=0) as client:
         async def check(case):
             name, prepared, dialog, expected, discount = case
-            history = [{'type':'function_call','call_id':'fixture_context','name':'get_cart_context','arguments':'{}'},
-                       {'type':'function_call_output','call_id':'fixture_context','output':json.dumps(context)}]
+            fixture = context
+            if name in ('quality_empty_description', 'quality_after_confirm'):
+                fixture = {**context, 'cart': {**context['cart'], 'items': [
+                    {**context['cart']['items'][0], 'description': ''}]}}
+            history = [{'type':'function_call','call_id':'fixture_context',
+                        'name':'confirm_contact' if name == 'quality_after_confirm' else 'get_cart_context','arguments':'{}'},
+                       {'type':'function_call_output','call_id':'fixture_context','output':json.dumps(fixture)}]
             if prepared:
                 history += [{'type':'function_call','call_id':'fixture_offer','name':'get_offer','arguments':'{"discount_id":"synthetic-discount"}'},
                             {'type':'function_call_output','call_id':'fixture_offer','output':json.dumps({'percent':10,'code':'SYNTHETIC10','merchandiseTotalCents':9000,'currency':'EUR'})}]
@@ -81,7 +92,7 @@ async def main():
             else:
                 passed = not stops_contact and not any(item.name in ('send_checkout_link','end_call') for item in calls)
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed}),flush=True)
+                'ms':elapsed, **({'reply': result.output_text} if name.startswith('quality_') else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in CASES))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
