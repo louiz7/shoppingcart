@@ -399,18 +399,26 @@ async function getOffer(call, percent, discountId) {
     }
 }
 
-async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount) {
+// The reasoning agent interprets intent; the worker supplies the actual committed user event.
+async function conversationEvidence(client, call, userEventId) {
+    if (!uuid(userEventId)) throw policy.problem('conversation_evidence_required', 409);
+    const { rows } = await client.query(`SELECT data,created_at FROM recovery_events WHERE call_id=$1 AND shop_id=$2
+        AND kind='user_transcript' AND created_at>NOW()-INTERVAL '2 minutes'
+        ORDER BY created_at DESC LIMIT 1`, [call.id,call.shop_id]);
+    if (rows[0]?.data.eventId !== userEventId) throw policy.problem('conversation_changed', 409);
+    return rows[0];
+}
+
+async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount, userEventId) {
     const { rows: calls } = await client.query(`SELECT id FROM recovery_calls WHERE id=$1 AND shop_id=$2
         AND checkout_id=$3 AND contact_key=$4 AND identity_verified AND expires_at>NOW()
         AND status IN ('reserved','dialing','connected')`, [call.id, shop.id, call.checkout_id, ctx.checkout.contact_key]);
     if (!calls[0]) throw policy.problem('call_authorization_changed', 409);
-    const { rows: transcripts } = await client.query(`SELECT data FROM recovery_events WHERE call_id=$1
-        AND kind='user_transcript' AND created_at>NOW()-INTERVAL '2 minutes' ORDER BY created_at DESC LIMIT 1`, [call.id]);
-    if (!policy.explicitSmsRequest(transcripts[0]?.data.text)) throw policy.problem('explicit_sms_request_required', 409);
+    const consent = await conversationEvidence(client, call, userEventId);
     if (!useDiscount) {
         const plain = new URL(policy.checkoutUrl(ctx.checkout.snapshot.checkoutUrl, shop));
         plain.searchParams.delete('discount');
-        return { consentEvent: transcripts[0].data.eventId, offerId: null,
+        return { consentEvent: consent.data.eventId, offerId: null,
             cartHash: policy.cartHash(ctx.checkout.snapshot), checkoutUrl: plain.href };
     }
     const { rows: offers } = await client.query(`SELECT id,status,data,created_at FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
@@ -427,16 +435,21 @@ async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount
             discountProof.code!==offer.code || discountProof.percent!==offer.percent ||
             new Date(offer.expiresAt)>new Date(discountProof.expiresAt)) throw policy.problem('valid_offer_required',409);
     }
-    const { rows: turns } = await client.query(`SELECT kind,data FROM recovery_events WHERE call_id=$1 AND shop_id=$2
-        AND kind IN ('user_transcript','assistant_transcript') AND created_at >= $3
-        ORDER BY created_at DESC LIMIT 80`, [call.id,shop.id,offers[0].created_at]);
-    const agreementEvent = policy.discountAgreement(turns.reverse(), offer);
-    if (!agreementEvent) throw policy.problem('discount_agreement_required', 409);
-    return { consentEvent: transcripts[0].data.eventId, agreementEvent, offerId: offers[0].id,
+    // Speech must precede the user's response and belong to the current confirmed offer.
+    // Its meaning is interpreted by GPT Live; interrupted speech cannot establish an offer review.
+    const { rows: reviews } = await client.query(`SELECT review.data FROM recovery_events review
+        JOIN recovery_actions offer ON offer.id=$3
+        JOIN recovery_events consent ON consent.call_id=$1 AND consent.kind='user_transcript' AND consent.data->>'eventId'=$4
+        WHERE review.call_id=$1 AND review.shop_id=$2 AND review.kind='assistant_transcript'
+        AND review.created_at >= offer.created_at AND review.created_at < consent.created_at
+        ORDER BY review.created_at DESC LIMIT 1`, [call.id,shop.id,offers[0].id,consent.data.eventId]);
+    if (!reviews[0] || reviews[0].data.interrupted === true) throw policy.problem('discount_review_required', 409);
+    const agreementEvent = consent.data.eventId;
+    return { consentEvent: consent.data.eventId, agreementEvent, offerId: offers[0].id,
         cartHash: offer.cartHash, checkoutUrl: policy.checkoutUrl(offer.checkoutUrl, shop) };
 }
 
-async function sendLink(call, useDiscount = false) {
+async function sendLink(call, useDiscount = false, userEventId) {
     if (typeof useDiscount !== 'boolean') throw policy.problem('invalid_discount_selection');
     if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);
     await refresh(call.customer_id, call.shop_id, call.checkout_id);
@@ -449,7 +462,7 @@ async function sendLink(call, useDiscount = false) {
         const { rows: prior } = await client.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [call.checkout_id]);
         if (prior[0]) return { duplicate: true, status: prior[0].status };
         if (shop.mode === 'live') telephony.assertSmsReady();
-        const authorization = await authorizeLink(client, call, shop, ctx, initialDiscountProof, useDiscount);
+        const authorization = await authorizeLink(client, call, shop, ctx, initialDiscountProof, useDiscount, userEventId);
         const id = randomUUID();
         await client.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'sms',$3,$4)`,
         [id, call.checkout_id, shop.mode === 'simulation' ? 'simulated' : 'pending', JSON.stringify(authorization)]);
@@ -465,7 +478,7 @@ async function sendLink(call, useDiscount = false) {
             const ctx = await state(client, shop, call.checkout_id, true);
             const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
             if (denied) throw policy.problem(denied, 409);
-            const authorization = await authorizeLink(client, call, shop, ctx, latestDiscountProof, useDiscount);
+            const authorization = await authorizeLink(client, call, shop, ctx, latestDiscountProof, useDiscount, userEventId);
             if (ctx.checkout.phone !== action.number || Object.keys(action.authorization).some((key) =>
                 authorization[key] !== action.authorization[key])) throw policy.problem('sms_authorization_changed', 409);
             return `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
@@ -493,23 +506,19 @@ async function sendLink(call, useDiscount = false) {
 }
 
 async function recordTranscript(call, input) {
-    if (!uuid(input.eventId) || !['user', 'assistant'].includes(input.role) || typeof input.text !== 'string' || input.text.length > 4000) throw policy.problem('invalid_transcript');
-    await event(db, call.shop_id, `${input.role}_transcript`, { text: input.text, eventId: input.eventId }, call.id, null, input.eventId);
-    if (input.role === 'user' && policy.stopSignal(input.text)) return stopContact(call.customer_id, call.shop_id, call.checkout_id, 'spoken_opt_out');
+    if (!uuid(input.eventId) || !['user', 'assistant'].includes(input.role) || typeof input.text !== 'string' || !input.text.trim() || input.text.length > 4000 ||
+        (input.interrupted !== undefined && typeof input.interrupted !== 'boolean')) throw policy.problem('invalid_transcript');
+    await event(db, call.shop_id, `${input.role}_transcript`, { text: input.text, eventId: input.eventId, interrupted: input.interrupted === true }, call.id, null, input.eventId);
     return { recorded: true };
 }
 
-async function confirmContact(call) {
+async function confirmContact(call, userEventId) {
     return transaction(async (client) => {
         const shop = await shopFor(call.customer_id,call.shop_id,client,true);
         const ctx = await state(client,shop,call.checkout_id,true);
         const denied = policy.eligibility(ctx,new Date(),'action',call.is_test===true);
         if (denied) throw policy.problem(denied,409);
-        const { rows } = await client.query(`SELECT kind,data FROM recovery_events WHERE call_id=$1 AND shop_id=$2
-            AND kind IN ('user_transcript','assistant_transcript') AND created_at>NOW()-INTERVAL '2 minutes'
-            ORDER BY created_at DESC LIMIT 2`,[call.id,shop.id]);
-        if (rows[0]?.kind!=='user_transcript' || rows[1]?.kind!=='assistant_transcript' ||
-            !policy.conversationPermission(rows[0].data.text,rows[1].data.text)) throw policy.problem('contact_confirmation_required',409);
+        await conversationEvidence(client, call, userEventId);
         const confirmed = await client.query(`UPDATE recovery_calls SET identity_verified=TRUE
             WHERE id=$1 AND shop_id=$2 AND checkout_id=$3 AND contact_key=$4
             AND expires_at>NOW() AND ended_at IS NULL AND status IN ('reserved','dialing','connected') RETURNING id`,

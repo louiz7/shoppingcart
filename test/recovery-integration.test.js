@@ -66,6 +66,12 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         return r.rows[0].snapshot;
     });
 
+    async function sendLink(call, useDiscount) {
+        const { rows } = await db.query(`SELECT data FROM recovery_events WHERE call_id=$1 AND kind='user_transcript'
+            ORDER BY created_at DESC LIMIT 1`,[call.id]);
+        return s.sendLink(call,useDiscount,rows[0]?.data.eventId);
+    }
+
     await t.test('expired or deactivated calls can only close their own real room, never run more shop actions', async () => {
         const f = await fixture(); await activate(f); const call = await fakeCall(f);
         const token = 'b'.repeat(64);
@@ -247,6 +253,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
     await t.test('spoken refusal persists contact-wide stop and cancels pending actions', async () => {
         const f = await fixture(); await activate(f); const call = await fakeCall(f);
         await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Nein danke, bitte nicht mehr anrufen.' });
+        await s.stopContact(call.customer_id,call.shop_id,call.checkout_id,'spoken_opt_out');
         await assert.rejects(s.startCall(f.customerId, f.shopId, f.checkoutId), /contact_stopped/);
         await assert.rejects(s.getOffer(call, 10), /contact_stopped/);
         assert.ok(hangup.mock.calls.length > 0);
@@ -260,14 +267,16 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.equal(initial.cart, undefined); assert.equal(initial.contactConfirmed, false);
         assert.equal(initial.supportEmail,undefined);
         await assert.rejects(s.getOffer(call, 10), /contact_confirmation_required/);
-        await assert.rejects(s.confirmContact(call), /contact_confirmation_required/);
+        await assert.rejects(s.confirmContact(call), /conversation_evidence_required/);
         await s.recordTranscript(call, { role: 'assistant',eventId: randomUUID(),text: 'Passt es gerade kurz?' });
         await s.recordTranscript(call, { role: 'user',eventId: randomUUID(),text: 'Ja, aber später.' });
-        await assert.rejects(s.confirmContact(call), /contact_confirmation_required/);
+        await assert.rejects(s.confirmContact(call), /conversation_evidence_required/);
         assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,false);
         await s.recordTranscript(call, { role: 'assistant', eventId: randomUUID(), text: 'Hallo, hier ist Rescova, die KI-Assistenz von Test. Passt es gerade kurz?' });
-        await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Ja, genau.' });
-        assert.equal((await s.confirmContact(call)).contactConfirmed, true);
+        const userEventId = randomUUID();
+        await s.recordTranscript(call, { role: 'user', eventId: userEventId, text: 'Mich interessiert, ob das auch auf Reisen taugt.' });
+        await assert.rejects(s.confirmContact(call,randomUUID()),/conversation_changed/);
+        assert.equal((await s.confirmContact(call,userEventId)).contactConfirmed, true);
         assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,true);
         assert.equal((await s.getContext({ ...call,identity_verified:true })).supportEmail,'support@example.invalid');
     });
@@ -297,10 +306,10 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         const f = await fixture(); await activate(f); const call = await fakeCall(f);
         await db.query(`UPDATE recovery_shops SET mode='live' WHERE id=$1`, [f.shopId]);
         await s.getOffer(call, 10);
-        await assert.rejects(s.sendLink(call), /explicit_sms_request_required/);
+        await assert.rejects(sendLink(call), /conversation_evidence_required/);
         await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Bitte schick mir den Link per SMS.' });
         const before = sms.mock.calls.length;
-        const results = await Promise.all([s.sendLink(call), s.sendLink(call)]);
+        const results = await Promise.all([sendLink(call), sendLink(call)]);
         assert.equal(sms.mock.calls.length, before+1);
         assert.equal(results.filter((r) => r.duplicate).length, 1);
         assert.equal(results.find((r) => !r.duplicate).delivered, false);
@@ -317,11 +326,11 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             { sql: `INSERT INTO recovery_events(id,shop_id,call_id,kind,data,created_at)
                 SELECT gen_random_uuid(),shop_id,id,'user_transcript',
                     jsonb_build_object('text','Bitte keine SMS senden.','eventId',gen_random_uuid()),clock_timestamp()
-                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /explicit_sms_request_required/ },
+                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /conversation_changed/ },
             { sql: `INSERT INTO recovery_events(id,shop_id,call_id,kind,data,created_at)
                 SELECT gen_random_uuid(),shop_id,id,'user_transcript',
                     jsonb_build_object('text','Bitte senden Sie mir den Link per SMS, aber ohne Rabatt.','eventId',gen_random_uuid()),clock_timestamp()
-                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /discount_agreement_required/ },
+                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /conversation_changed/ },
         ];
         for (const change of changes) {
             const f = await fixture(); await activate(f); const call = await fakeCall(f);
@@ -338,10 +347,10 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
                 await db.query(`CREATE TRIGGER ${name} AFTER INSERT ON recovery_actions FOR EACH ROW
                     WHEN (NEW.kind='sms' AND NEW.checkout_id='${f.checkoutId}') EXECUTE FUNCTION ${name}()`);
                 const before = sms.mock.calls.length;
-                await assert.rejects(s.sendLink(call, true), change.error);
+                await assert.rejects(sendLink(call, true), change.error);
                 assert.equal(sms.mock.calls.length, before);
                 assert.equal((await db.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [f.checkoutId])).rows[0].status, 'failed');
-                assert.deepEqual(await s.sendLink(call, true), { status: 'failed', duplicate: true });
+                assert.deepEqual(await sendLink(call, true), { status: 'failed', duplicate: true });
                 assert.equal(sms.mock.calls.length, before);
             } finally { await db.query(`DROP FUNCTION ${name}() CASCADE`); }
         }
@@ -355,8 +364,8 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         const before = sms.mock.calls.length;
         sms.mock.mockImplementation(async () => { throw new Error('synthetic provider timeout'); });
         try {
-            await assert.rejects(s.sendLink(call), /sms_result_unknown_do_not_retry/);
-            assert.deepEqual(await s.sendLink(call), { status: 'unknown', duplicate: true });
+            await assert.rejects(sendLink(call), /sms_result_unknown_do_not_retry/);
+            assert.deepEqual(await sendLink(call), { status: 'unknown', duplicate: true });
             assert.equal(sms.mock.calls.length, before+1);
         } finally { sms.mock.mockImplementation(async () => ({ id: `SM${'a'.repeat(32)}`, status: 'queued' })); }
     });

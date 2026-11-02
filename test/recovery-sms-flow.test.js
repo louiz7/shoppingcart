@@ -95,10 +95,33 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         return { call, snapshot, customerId, shopId, checkoutId };
     }
 
+    async function sendLink(call, useDiscount) {
+        const { rows } = await db.query(`SELECT data FROM recovery_events WHERE call_id=$1 AND kind='user_transcript'
+            ORDER BY created_at DESC LIMIT 1`,[call.id]);
+        return service.sendLink(call,useDiscount,rows[0]?.data.eventId);
+    }
+
+    await t.test('SMS decisions require current user provenance, not keywords or another call', async () => {
+        const f = await fixture(), other = await fixture();
+        const own = randomUUID(), foreign = randomUUID();
+        await service.recordTranscript(f.call,{role:'user',eventId:own,text:'Das klingt gut, gerne.'});
+        await service.recordTranscript(other.call,{role:'user',eventId:foreign,text:'Ja, bitte.'});
+        await assert.rejects(service.sendLink(f.call,false),/conversation_evidence_required/);
+        await assert.rejects(service.sendLink(f.call,false,foreign),/conversation_changed/);
+        await service.recordTranscript(f.call,{role:'user',eventId:randomUUID(),text:'Einen Moment noch.'});
+        await assert.rejects(service.sendLink(f.call,false,own),/conversation_changed/);
+        assert.equal((await db.query("SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'",[f.call.checkout_id])).rows[0].n,0);
+    });
+    await t.test('a scoped no does not silently stop contact; the reasoning tool selects the action', async () => {
+        const f = await fixture();
+        const id = randomUUID();
+        await service.recordTranscript(f.call,{role:'user',eventId:id,text:'Nein, den Rabatt brauche ich nicht. Den Link hätte ich gerne.'});
+        assert.equal((await service.sendLink(f.call,false,id)).status,'accepted');
+    });
     await t.test('original opaque checkout URL is sent once without creating an offer', async () => {
         const f = await fixture(), before = send.mock.calls.length;
-        assert.deepEqual(await service.sendLink(f.call), { status: 'accepted', delivered: false });
-        assert.deepEqual(await service.sendLink(f.call), { status: 'accepted', duplicate: true });
+        assert.deepEqual(await sendLink(f.call), { status: 'accepted', delivered: false });
+        assert.deepEqual(await sendLink(f.call), { status: 'accepted', duplicate: true });
         assert.equal(send.mock.calls.length, before+1);
         assert.equal(send.mock.calls[before].arguments[0], f.snapshot.phone);
         assert.equal(send.mock.calls[before].arguments[1], `Test shop: Hier ist Ihr gewünschter Checkout-Link: ${f.snapshot.checkoutUrl}`);
@@ -108,8 +131,8 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         const f = await fixture(), before = send.mock.calls.length;
         const original = `${f.snapshot.checkoutUrl}&discount=EXISTING&discount=SECOND`;
         await db.query("UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{checkoutUrl}',to_jsonb($2::text)) WHERE id=$1",[f.checkoutId,original]);
-        await assert.rejects(service.sendLink(f.call,'true'),/invalid_discount_selection/);
-        await service.sendLink(f.call,false);
+        await assert.rejects(sendLink(f.call,'true'),/invalid_discount_selection/);
+        await sendLink(f.call,false);
         const link = new URL(send.mock.calls[before].arguments[1].split(' ').at(-1));
         assert.equal(link.searchParams.has('discount'),false);
         assert.equal(link.searchParams.get('key'),'synthetic');
@@ -117,32 +140,32 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
     await t.test('disabled or missing SMS configuration reserves no intent', async () => {
         const f = await fixture(), before = send.mock.calls.length;
         ready.mock.mockImplementation(() => { throw policy.problem('sms_disabled', 409); });
-        try { await assert.rejects(service.sendLink(f.call), /sms_disabled/); }
+        try { await assert.rejects(sendLink(f.call), /sms_disabled/); }
         finally { ready.mock.mockImplementation(() => {}); }
         assert.equal((await db.query(`SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [f.checkoutId])).rows[0].n, 0);
         assert.equal(send.mock.calls.length, before);
-        assert.equal((await service.sendLink(f.call)).status, 'accepted');
+        assert.equal((await sendLink(f.call)).status, 'accepted');
     });
     await t.test('cached identity cannot authorize a changed contact or ended call', async () => {
         const f = await fixture(), before = send.mock.calls.length;
         await db.query(`UPDATE recovery_calls SET status='ended' WHERE id=$1`, [f.call.id]);
-        await assert.rejects(service.sendLink(f.call), /call_authorization_changed/);
+        await assert.rejects(sendLink(f.call), /call_authorization_changed/);
         await db.query(`UPDATE recovery_calls SET status='connected',identity_verified=FALSE WHERE id=$1`, [f.call.id]);
-        await assert.rejects(service.sendLink(f.call), /call_authorization_changed/);
+        await assert.rejects(sendLink(f.call), /call_authorization_changed/);
         const otherPhone = '+4900000000009', otherContact = policy.contactKey(f.shopId, otherPhone);
         await db.query('INSERT INTO recovery_contacts(shop_id,contact_key,phone) VALUES($1,$2,$3)', [f.shopId, otherContact, otherPhone]);
         await db.query('UPDATE recovery_calls SET identity_verified=TRUE,contact_key=$2 WHERE id=$1', [f.call.id, otherContact]);
-        await assert.rejects(service.sendLink(f.call), /call_authorization_changed/);
+        await assert.rejects(sendLink(f.call), /call_authorization_changed/);
         assert.equal(send.mock.calls.length, before);
     });
     await t.test('unconfirmed or simulated discounts are not sent through a live checkout SMS', async () => {
         const f = await fixture(), before = send.mock.calls.length;
         await db.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'offer','unknown','{}')`, [randomUUID(), f.checkoutId]);
-        await assert.rejects(service.sendLink(f.call, true), /valid_offer_required/);
+        await assert.rejects(sendLink(f.call, true), /valid_offer_required/);
         await db.query(`UPDATE recovery_actions SET status='simulated',data=$2 WHERE checkout_id=$1 AND kind='offer'`, [f.checkoutId,
             JSON.stringify({ ...policy.offer({}, 11800, 10), currency: 'USD', expiresAt: new Date(Date.now()+3600000).toISOString(),
                 cartHash: policy.cartHash(f.snapshot), checkoutUrl: `${f.snapshot.checkoutUrl}&discount=FAKE` })]);
-        await assert.rejects(service.sendLink(f.call, true), /valid_offer_required/);
+        await assert.rejects(sendLink(f.call, true), /valid_offer_required/);
         assert.equal(send.mock.calls.length, before);
     });
     await t.test('receipt before acknowledgement and immediate delivery survive persistence', async () => {
@@ -151,11 +174,11 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
             await db.query(`INSERT INTO recovery_sms_receipts(action_id,provider_id,status) VALUES($1,$2,'delivered')`, [action, providerId]);
             return { id: providerId, status: 'queued' };
         });
-        try { assert.deepEqual(await service.sendLink(f.call), { status: 'delivered', delivered: true }); }
+        try { assert.deepEqual(await sendLink(f.call), { status: 'delivered', delivered: true }); }
         finally { send.mock.mockImplementation(async () => ({ id: `SM${'c'.repeat(32)}`, status: 'queued' })); }
         const direct = await fixture();
         send.mock.mockImplementation(async () => ({ id: providerId, status: 'delivered' }));
-        try { assert.deepEqual(await service.sendLink(direct.call), { status: 'delivered', delivered: true }); }
+        try { assert.deepEqual(await sendLink(direct.call), { status: 'delivered', delivered: true }); }
         finally { send.mock.mockImplementation(async () => ({ id: `SM${'c'.repeat(32)}`, status: 'queued' })); }
     });
 });

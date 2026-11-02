@@ -115,7 +115,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
             async def json(self):
                 if failure == 'context_malformed':
                     raise ValueError('synthetic malformed context')
-                return initial
+                return {'recorded': True} if self.name == 'transcript' else ({'ended': True} if self.name == 'end' else initial)
 
             async def text(self):
                 return '{"ended":true}'
@@ -143,7 +143,9 @@ class WorkerLifecycle(OfflineRecoveryCase):
                     raise module.aiohttp.ClientConnectionError('synthetic offline gateway')
                 if failure == 'end_transport' and name == 'end':
                     raise module.aiohttp.ClientConnectionError('synthetic offline cleanup')
-                return Response()
+                response = Response()
+                response.name = name
+                return response
 
         class Session(module.rtc.EventEmitter):
             def __init__(self):
@@ -278,9 +280,9 @@ class WorkerLifecycle(OfflineRecoveryCase):
         with self.assertNoLogs('livekit', level='ERROR'):
             await self.run_fixture(ctx, http, session)
         transcripts = [payload for name, payload in http.payloads if name == 'transcript']
-        self.assertEqual(len(transcripts), 1)
-        self.assertEqual(transcripts[0]['role'], 'assistant')
-        self.assertEqual(transcripts[0]['text'], 'Synthetic assistant greeting')
+        self.assertEqual(len(transcripts), 2)
+        self.assertEqual([item['role'] for item in transcripts], ['user', 'assistant'])
+        self.assertEqual(transcripts[1]['text'], 'Synthetic assistant greeting')
         self.assertEqual(http.requests.count('end'), 1)
 
     async def test_fatal_voice_service_failure_records_generic_result_before_cleanup(self):
@@ -292,6 +294,70 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertNotIn('credit', result['summary'])
         self.assertEqual(session.close_calls, 1)
         ctx.shutdown.assert_called_once()
+
+    async def test_committed_messages_are_serialized_and_bound_to_tool_calls(self):
+        agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
+        started, release = asyncio.Event(), asyncio.Event()
+        writes = []
+
+        async def backend(http, token, name, data=None):
+            if name == 'transcript' and not started.is_set():
+                started.set()
+                await release.wait()
+            writes.append((name, data))
+            return '{"recorded":true}'
+
+        with patch.object(self.module, 'backend_tool', side_effect=backend):
+            first = agent.record_message(llm.ChatMessage(role='assistant', content=['Soll ich dir den Link schicken?']))
+            await started.wait()
+            second = agent.record_message(llm.ChatMessage(role='user', content=['Das wäre super.']))
+            action = asyncio.create_task(agent.tool('send_link', {'useDiscount':False}))
+            await asyncio.sleep(0)
+            self.assertEqual(writes, [])
+            release.set()
+            await asyncio.gather(first, second, action)
+        self.assertEqual([name for name, _ in writes], ['transcript','transcript','send_link'])
+        self.assertEqual(writes[-1][1]['userEventId'], writes[1][1]['eventId'])
+        self.assertFalse(writes[-1][1]['useDiscount'])
+
+    async def test_new_user_turn_or_interrupted_response_invalidates_pending_action(self):
+        for interrupted in [False, True]:
+            with self.subTest(interrupted=interrupted):
+                agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
+                agent.latest_user_event = 'old-user-event'
+                release = asyncio.Event()
+                agent.transcript_tail = asyncio.create_task(release.wait())
+                context = SimpleNamespace(speech_handle=SimpleNamespace(interrupted=interrupted))
+                with patch.object(self.module,'backend_tool',new=AsyncMock()) as backend:
+                    action = asyncio.create_task(agent.tool('send_link',context=context))
+                    await asyncio.sleep(0)
+                    if not interrupted:
+                        agent.latest_user_event = 'new-user-event'
+                    release.set()
+                    self.assertEqual(json.loads(await action)['error'],'conversation_changed')
+                    backend.assert_not_awaited()
+
+    async def test_failed_transcript_blocks_effect_but_never_blocks_contact_stop(self):
+        agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
+        with patch.object(self.module,'backend_tool',new=AsyncMock(return_value='{"error":"tool_unavailable"}')) as backend:
+            with self.assertRaisesRegex(RuntimeError,'transcript_not_persisted'):
+                await agent.record_message(llm.ChatMessage(role='user',content=['Ja, gerne.']))
+            self.assertEqual(json.loads(await agent.tool('send_link'))['error'],'conversation_evidence_required')
+            await agent.stop_contact(None)
+            self.assertEqual([call.args[2] for call in backend.await_args_list],['transcript','stop'])
+
+    async def test_gateway_preserves_safe_error_codes_and_hides_raw_errors(self):
+        class Response:
+            status = 409
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_): pass
+            async def json(self): return self.payload
+        response = Response()
+        http = SimpleNamespace(post=Mock(return_value=response))
+        for value, expected in [('cart_changed','cart_changed'),('provider failed: secret=unsafe','action_not_confirmed')]:
+            response.payload = {'error':value,'secret':'must not leave gateway'}
+            result = json.loads(await self.module.backend_tool(http,'test','send_link'))
+            self.assertEqual(result,{'error':expected,'status':409})
 
     async def test_invalid_metadata_never_connects_or_opens_http(self):
         for metadata in ['{broken', '[]', 'null', '{"mode":"recovery","call_token":"bad"}', '{"mode":"collection"}']:

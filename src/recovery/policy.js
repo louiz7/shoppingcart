@@ -111,64 +111,10 @@ function checkoutUrl(value, shop, code) {
     return url.href;
 }
 
-// Conservative transcript proof: a generic SMS request is never discount agreement.
-function discountAgreement(turns, offer) {
-    let prompt = '', accepted = null;
-    const discount = /\b(rabatt|rabattcode|discount|code)\b/i;
-    const negative = /\b(nein|nicht|kein\w*|ohne|später|vielleicht|aber|wenn|statt|regulär|no|not|without|later|maybe|never|but|if|instead|full price|don['’]?t)\b/i;
-    const affirmative = /^\s*(ja|yes|sure|okay|ok|klar|gerne|einverstanden|agreed|abgemacht|sounds good)\b/i;
-    const agreementQuestion = /einverstanden|akzeptier|annehmen|nutzen|\bagree\b|\baccept\b|\buse\b/i;
-    const percentages = (text) => [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:%|prozent|percent)/gi)]
-        .map((match) => Number(match[1].replace(',', '.')));
-    const quoted = (text) => discount.test(text) && percentages(text).length === 1 &&
-        percentages(text)[0] === offer.percent && agreementQuestion.test(text) &&
-        !/\b(oder|or)\b/i.test(text) && !negative.test(text);
-    const words = Object.fromEntries([
-        'null|eins|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf|dreizehn|vierzehn|fünfzehn|sechzehn|siebzehn|achtzehn|neunzehn|zwanzig|einundzwanzig|zweiundzwanzig|dreiundzwanzig|vierundzwanzig|fünfundzwanzig|sechsundzwanzig|siebenundzwanzig|achtundzwanzig|neunundzwanzig|dreißig',
-        'zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty one|twenty two|twenty three|twenty four|twenty five|twenty six|twenty seven|twenty eight|twenty nine|thirty',
-    ].flatMap((language) => language.split('|').map((word, value) => [word,value])));
-    const numberWords = new RegExp(`\\b(${Object.keys(words).sort((a,b) => b.length-a.length).join('|')})\\b`, 'gi');
-    for (const turn of turns) {
-        const text = String(turn.data?.text || '').replaceAll('-', ' ').replace(numberWords, (word) => String(words[word.toLowerCase()]));
-        if (turn.kind === 'assistant_transcript') {
-            if (discount.test(text) && agreementQuestion.test(text)) accepted = null;
-            prompt = text;
-            continue;
-        }
-        if (negative.test(text)) accepted = null;
-        else if (affirmative.test(text) && quoted(prompt) &&
-            percentages(text).every((value) => value === offer.percent)) accepted = turn.data.eventId;
-        prompt = '';
-    }
-    return accepted;
-}
-
 function cartHash(snapshot) {
     return createHash('sha256').update(JSON.stringify({ currency: snapshot.currency, subtotalCents: snapshot.subtotalCents,
         discountCodes: snapshot.discountCodes, items: snapshot.items?.map((i) => [i.variantId, i.quantity,
             i.originalUnitCents, i.currentPriceCents, i.available]) })).digest('hex');
-}
-
-function conversationPermission(text, prompt) {
-    const answer = String(text || '').toLowerCase().replace(/\u2019/g,"'");
-    const timing = /(?:\bpasst (?:es|das) (?:gerade|kurz)\b|\bis (?:now|this) (?:a )?good time\b)/i.test(String(prompt));
-    const help = /(?:\bfrage\b.*\bprodukten\b.*\bhelfen\b|\bproduct question\b.*\bhelp\b)/i.test(String(prompt));
-    const affirmative = /^\s*(ja|yes|sure|okay|ok|klar|gerne|natürlich|of course|go ahead|passt|es passt|das passt)\b/i.test(answer);
-    const productQuestion = /^\s*(was|wie|wann|wo|welch\w*|kann|könn\w*|ist|sind|hat|haben|gibt|kostet|what|how|when|where|which|can|could|is|are|does|do)\b/i.test(answer) &&
-        /\b(produkt\w*|artikel|größe\w*|groesse\w*|preis\w*|kostet|rabatt\w*|versand\w*|liefer\w*|material\w*|farbe\w*|passform|retour\w*|rückgabe|hoodie|shirt|product\w*|item\w*|size\w*|price\w*|cost\w*|shipping|delivery|return\w*|discount\w*|fit|colou?r\w*|available|stock|waterproof)\b|wie fällt .*aus|how much/i.test(answer);
-    return (timing || help) && (affirmative || (help && productQuestion)) &&
-        !/\b(nein|nicht|kein|keine|falsch|später|mailbox|no|not|never|wrong|later|busy|voicemail|don'?t|can'?t)\b/i.test(answer) && !stopSignal(answer);
-}
-
-function explicitSmsRequest(text) {
-    const normalized = String(text || '').toLowerCase().replace(/\u2019/g,"'").replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (/\b(nein|nicht|kein|keine|stop|widerruf|no|not|never|without|cannot|refuse|decline|cancel|don'?t|didn'?t|can'?t|won'?t|wouldn'?t|shouldn'?t|couldn'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|aren'?t|weren'?t)\b/.test(normalized)) return false;
-    return /\b(schick|schicke|sende|send|senden|text)\b.*\b(link|sms)\b/.test(normalized) ||
-        /\b(ja|bitte|yes|please)\b.*\b(link|sms)\b/.test(normalized);
-}
-
-function stopSignal(text) {
-    return /^\s*(nein|no)[\s.!?,]*$/i.test(String(text)) || /\b(kein interesse|nicht interessiert|nicht mehr anrufen|nicht anrufen|keine anrufe|falsche nummer|falsche person|kontaktverbot|widerrufe|stop|nein danke|not interested|no thanks|no thank you|do not (call|contact)|don['\u2019]?t (call|contact)|stop (calling|contacting)|wrong (number|person)|remove (me|my number)|revoke (my )?consent|withdraw (my )?consent)\b/i.test(String(text));
 }
 
 function experimentReport(rows, costsCents = 0) {
@@ -184,4 +130,4 @@ function experimentReport(rows, costsCents = 0) {
 }
 
 module.exports = { DEFAULT_RULES, problem, rules, cents, phone, contactKey, assignment, inWindow,
-    eligibility, offer, checkoutUrl, cartHash, discountAgreement, conversationPermission, explicitSmsRequest, stopSignal, experimentReport };
+    eligibility, offer, checkoutUrl, cartHash, experimentReport };

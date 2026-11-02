@@ -79,6 +79,12 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         return { id,shop_id: f.shopId,checkout_id: checkoutId,customer_id: f.customerId,identity_verified: true };
     }
 
+    async function sendLink(call, useDiscount) {
+        const { rows } = await db.query(`SELECT data FROM recovery_events WHERE call_id=$1 AND kind='user_transcript'
+            ORDER BY created_at DESC LIMIT 1`,[call.id]);
+        return service.sendLink(call,useDiscount,rows[0]?.data.eventId);
+    }
+
     await t.test('merchant validation and tenant isolation reject requests before Shopify is called',async () => {
         const f = await fixture(),other = await fixture(),before = mutationCount;
         for (const change of [{percent: 11},{percent: 0},{code: 'lowercase'},{title: ''},{minSubtotalCents: 4999},
@@ -132,7 +138,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         await service.recordTranscript(call,{ role: 'user',eventId: randomUUID(),text: 'Ja, gerne.' });
         await service.recordTranscript(call,{ role: 'user',eventId: randomUUID(),text: 'Bitte senden Sie mir den Link per SMS.' });
         const before = sms.mock.calls.length;
-        assert.deepEqual(await service.sendLink(call, true),{status: 'accepted',delivered: false});
+        assert.deepEqual(await sendLink(call, true),{status: 'accepted',delivered: false});
         assert.equal(sms.mock.calls.length,before+1); assert.equal(adHoc.mock.calls.length,0);
         assert.equal(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).searchParams.get('discount'),'RETURN10');
     });
@@ -142,8 +148,8 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
             if (prepared) await service.getOffer(call,0,approved.id);
             await service.recordTranscript(call,{ role: 'user',eventId: randomUUID(),text: 'Bitte senden Sie mir den Link per SMS.' });
             const before = sms.mock.calls.length;
-            if (prepared) await assert.rejects(service.sendLink(call,true),/discount_agreement_required/);
-            await service.sendLink(call);
+            if (prepared) await assert.rejects(sendLink(call,true),/discount_review_required/);
+            await sendLink(call);
             const link = new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1));
             assert.equal(link.searchParams.has('discount'),false);
         }
@@ -155,9 +161,18 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         await service.getOffer(call,0,approved.id);
         await service.recordTranscript(call,{ role: 'user',eventId: randomUUID(),text: 'Bitte senden Sie mir den Link per SMS.' });
         const before = sms.mock.calls.length;
-        await assert.rejects(service.sendLink(call,true),/discount_agreement_required/);
+        await assert.rejects(sendLink(call,true),/discount_review_required/);
         assert.equal(sms.mock.calls.length,before);
         assert.equal((await db.query("SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'",[call.checkout_id])).rows[0].n,0);
+    });
+    await t.test('interrupted offer speech cannot authorize a discounted SMS',async () => {
+        const f = await fixture(),approved = (await discounts.create(f.customerId,f.shopId,f.input)).discount,call = await caller(f);
+        await service.getOffer(call,0,approved.id);
+        await service.recordTranscript(call,{ role:'assistant',eventId:randomUUID(),text:'Mit zehn Prozent Rabatt ...',interrupted:true });
+        await service.recordTranscript(call,{ role:'user',eventId:randomUUID(),text:'Schick mir den Link.' });
+        const before = sms.mock.calls.length;
+        await assert.rejects(sendLink(call,true),/discount_review_required/);
+        assert.equal(sms.mock.calls.length,before);
     });
     await t.test('Shopify deactivation or edits fail closed before offering or sending a catalog code',async () => {
         const f = await fixture(),approved = (await discounts.create(f.customerId,f.shopId,f.input)).discount,call = await caller(f);
@@ -176,11 +191,11 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         ]) {
             data.node=structuredClone(original); change(data.node.codeDiscount);
             await assert.rejects(service.getOffer(call,0,approved.id),/discount_not_available/);
-            await assert.rejects(service.sendLink(call, true),/discount_not_available/);
+            await assert.rejects(sendLink(call, true),/discount_not_available/);
         }
         data.node=original;
         await db.query(`UPDATE recovery_shops SET rules=jsonb_set(rules,'{maxDiscountPercent}','5') WHERE id=$1`,[f.shopId]);
-        await assert.rejects(service.sendLink(call, true),/discount_not_available/);
+        await assert.rejects(sendLink(call, true),/discount_not_available/);
         assert.equal(sms.mock.calls.length,before);
     });
     await t.test('remote reads do not hold the merchant/contact lock and policy is rechecked afterwards',async () => {
@@ -192,7 +207,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         let entered,release;
         const started = new Promise((resolve) => { entered=resolve; }),waiting = new Promise((resolve) => { release=resolve; });
         readHook = async () => { entered(); await waiting; };
-        const pending = service.sendLink(call, true); await started;
+        const pending = sendLink(call, true); await started;
         try {
             const stopped = await Promise.race([service.stopContact(f.customerId,f.shopId,call.checkout_id),
                 new Promise((_,reject) => { const timer=setTimeout(() => reject(new Error('Contact stop blocked by Shopify read')),1000); timer.unref(); })]);
@@ -209,11 +224,11 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         const row = (await db.query('SELECT shopify_id FROM recovery_discounts WHERE id=$1',[approved.id])).rows[0];
         let reads = 0; const before = sms.mock.calls.length;
         readHook = async () => { if (++reads===2) remote.get(row.shopify_id).node.codeDiscount.status='EXPIRED'; };
-        try { await assert.rejects(service.sendLink(call, true),/discount_not_available/); }
+        try { await assert.rejects(sendLink(call, true),/discount_not_available/); }
         finally { readHook=null; }
         const saved = (await db.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`,[call.checkout_id])).rows[0];
         assert.equal(saved.status,'failed'); assert.equal(sms.mock.calls.length,before);
-        await assert.rejects(service.sendLink(call, true),/discount_not_available/);
+        await assert.rejects(sendLink(call, true),/discount_not_available/);
         assert.equal(sms.mock.calls.length,before);
     });
     assert.ok(graphql.mock.calls.length>0);

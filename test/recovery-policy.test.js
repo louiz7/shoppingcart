@@ -136,12 +136,6 @@ test('holdout allocation is stable per shop/contact and has both groups', () => 
     assert.ok(groups.filter((g) => g === 'control').length < 300);
 });
 
-test('SMS requires explicit request and a refusal triggers suppression', () => {
-    assert.equal(p.explicitSmsRequest('Ja, bitte schick mir den Link per SMS.'), true);
-    for (const text of ['Ja', 'Nein, keine SMS', 'Schick den Link nicht', 'Vielleicht später']) assert.equal(p.explicitSmsRequest(text), false);
-    for (const text of ['Nein.', 'Nein danke', 'Bitte nicht mehr anrufen', 'Ich habe kein Interesse', 'Falsche Nummer']) assert.equal(p.stopSignal(text), true);
-});
-
 test('webhook verification is over the raw body and rejects tampering', () => {
     const raw = Buffer.from('{"a":1}'), secret = 'test-signing-secret';
     const signature = createHmac('sha256', secret).update(raw).digest('base64');
@@ -156,28 +150,4 @@ test('incremental contribution subtracts baseline and costs, requires both group
         { arm: 'treatment', purchased: false }, { arm: 'control', purchased: true, contribution_cents: 1000 }], 200);
     assert.equal(report.incrementalContributionCents, 1800);
     assert.equal(p.experimentReport([]).incrementalContributionCents, null);
-});
-
-
-test('discount agreement requires an explicit answer to the specific offer, separate from SMS permission', () => {
-    const offer = { percent: 10, code: 'RETURN10' };
-    const turn = (kind, text, eventId = 'agreement') => ({ kind: `${kind}_transcript`, data: { text, eventId } });
-    const quote = turn('assistant', 'Bist du mit diesen 10 Prozent Rabatt einverstanden?');
-    const sms = turn('user', 'Bitte schick mir den Link per SMS.', 'sms');
-    for (const answer of ['Ja, gerne.', 'Einverstanden.']) {
-        assert.equal(p.discountAgreement([quote, turn('user', answer), sms], offer), 'agreement');
-    }
-    for (const answer of ['Bitte schick den Link per SMS.', 'Ja, aber ohne Rabatt.', 'Ja, wenn der Versand gratis ist.', 'Ja, mit 20 Prozent Rabatt.', 'Vielleicht.', 'Nein.']) {
-        assert.equal(p.discountAgreement([quote, turn('user', answer)], offer), null);
-    }
-    assert.equal(p.discountAgreement([turn('assistant', 'Möchtest du den Link per SMS?'), turn('user', 'Ja.')], offer), null);
-    assert.equal(p.discountAgreement([turn('assistant', 'Bist du mit 20 Prozent Rabatt einverstanden?'), turn('user', 'Ja.')], offer), null);
-    assert.equal(p.discountAgreement([turn('assistant', '10 Prozent Rabatt sind verfügbar. Soll ich eine SMS schicken?'), turn('user', 'Ja.')], offer), null);
-    assert.equal(p.discountAgreement([quote, turn('user', 'Ja.'), turn('user', 'Doch ohne Rabatt bitte.'), sms], offer), null);
-    assert.equal(p.discountAgreement([quote, turn('user', 'Ja.'), turn('assistant', 'Bist du mit 20 Prozent Rabatt einverstanden?'), turn('user', 'Ja.'), sms], offer), null);
-    assert.equal(p.discountAgreement([turn('assistant', 'Bist du mit zehn Prozent Rabatt einverstanden?'), turn('user', 'Ja.')], offer), 'agreement');
-    assert.equal(p.discountAgreement([turn('assistant', 'Do you agree to this ten percent discount?'), turn('user', 'Yes.')], offer), 'agreement');
-    assert.equal(p.discountAgreement([turn('assistant', 'Bist du mit 20 oder 10 Prozent Rabatt einverstanden?'), turn('user', 'Ja.')], offer), null);
-    assert.equal(p.discountAgreement([turn('assistant', 'Bist du mit 10,5 Prozent Rabatt einverstanden?'), turn('user', 'Ja.')], offer), null);
-    assert.equal(p.discountAgreement([turn('assistant', 'Do you agree to this 10 percent discount?'), turn('user', 'Yes, please.'), sms], offer), 'agreement');
 });

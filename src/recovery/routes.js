@@ -125,9 +125,9 @@ toolsRouter.use(internal, handle(async (req, res) => {
     switch (name) {
     case 'context': result = await service.getContext(call); break;
     case 'connected': result = await service.recordConnection(call); break;
-    case 'confirm_contact': result = await service.confirmContact(call); break;
+    case 'confirm_contact': result = await service.confirmContact(call, req.body.userEventId); break;
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
-    case 'send_link': result = await service.sendLink(call, req.body.useDiscount); break;
+    case 'send_link': result = await service.sendLink(call, req.body.useDiscount, req.body.userEventId); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
     case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop'); break;
     case 'outcome': result = await service.outcome(call, req.body); break;
