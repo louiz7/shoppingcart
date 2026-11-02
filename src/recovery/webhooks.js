@@ -117,14 +117,9 @@ async function lifecycle(eventInput) {
 const router = express.Router();
 router.post(['/shopify/:shopId/:capability', '/shopify/privacy'], express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
     try {
-        if (!Buffer.isBuffer(req.body) || !shopify.signature(req.body, req.get('x-shopify-hmac-sha256'))) return res.status(401).json({ error: 'invalid_signature' });
+        if (!Buffer.isBuffer(req.body)) return res.status(401).json({ error: 'invalid_signature' });
         const domain = shopify.domain(req.get('x-shopify-shop-domain'));
-        const payload = JSON.parse(req.body.toString());
-        const topic = req.get('x-shopify-topic') || '';
         const privacy = req.path === '/shopify/privacy';
-        if (privacy && (!['customers/redact', 'customers/data_request', 'shop/redact'].includes(topic) || payload.shop_domain !== domain)) {
-            return res.status(401).json({ error: 'invalid_privacy_shop' });
-        }
         if (!privacy) {
             if (!service.uuid(req.params.shopId)) throw policy.problem('shop_not_found', 404);
             const expected = Buffer.from(shopify.webhookCapability(req.params.shopId));
@@ -134,6 +129,14 @@ router.post(['/shopify/:shopId/:capability', '/shopify/privacy'], express.raw({ 
         const { rows } = await db.query(`SELECT * FROM recovery_shops WHERE domain=$1 AND mode='live'
             AND ($2::uuid IS NULL OR id=$2)`, [domain, privacy ? null : req.params.shopId]);
         if (!rows[0]) return res.status(404).json({ error: 'shop_not_found' });
+        const credentials = rows[0].credentials_encrypted ? require('../services/shopify-crypto').decryptShopifyCredentials(rows[0].credentials_encrypted) : {};
+        const app = shopify.shopApp(rows[0], credentials);
+        if (!shopify.signature(req.body, req.get('x-shopify-hmac-sha256'), app.secret)) return res.status(401).json({ error: 'invalid_signature' });
+        const payload = JSON.parse(req.body.toString());
+        const topic = req.get('x-shopify-topic') || '';
+        if (privacy && (!['customers/redact', 'customers/data_request', 'shop/redact'].includes(topic) || payload.shop_domain !== domain)) {
+            return res.status(401).json({ error: 'invalid_privacy_shop' });
+        }
         const eventId = req.get('x-shopify-event-id') || req.get('x-shopify-webhook-id');
         if (!eventId || eventId.length > 150) throw policy.problem('invalid_event_id');
         const result = await ingestShopify(rows[0], topic, payload, eventId);

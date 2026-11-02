@@ -31,15 +31,16 @@ const handle = (fn) => async (req, res) => {
 
 async function startOAuth(customerId, value) {
     const domain = shopify.domain(value);
+    const app = shopify.appConfig(domain);
     const redirectUri = process.env.RECOVERY_SHOPIFY_REDIRECT_URI || process.env.SHOPIFY_REDIRECT_URI;
-    if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET || !redirectUri) {
+    if (!redirectUri) {
         throw policy.problem('shopify_app_not_configured', 503);
     }
     const token = randomBytes(32).toString('hex');
-    await db.query(`INSERT INTO recovery_oauth_states(state_hash,customer_id,shop_domain,expires_at)
-        VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes')`, [service.hash(token), customerId, domain]);
+    await db.query(`INSERT INTO recovery_oauth_states(state_hash,customer_id,shop_domain,expires_at,app_client_id)
+        VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes',$4)`, [service.hash(token), customerId, domain, app.clientId]);
     const url = new URL(`https://${domain}/admin/oauth/authorize`);
-    url.search = new URLSearchParams({ client_id: process.env.SHOPIFY_CLIENT_ID, scope: shopify.SCOPES.join(','),
+    url.search = new URLSearchParams({ client_id: app.clientId, scope: shopify.SCOPES.join(','),
         redirect_uri: redirectUri, state: token }).toString();
     return { url: url.href };
 }
@@ -47,27 +48,30 @@ async function startOAuth(customerId, value) {
 const oauthRouter = express.Router();
 oauthRouter.get('/callback', handle(async (req, res) => {
     const params = new URL(req.originalUrl, 'http://localhost').searchParams;
-    if (!shopify.oauthHmac(params)) throw policy.problem('invalid_oauth_signature', 401);
     const shopDomain = shopify.domain(params.get('shop'));
+    const app = shopify.appConfig(shopDomain);
+    if (!shopify.oauthHmac(params, app.secret)) throw policy.problem('invalid_oauth_signature', 401);
     const timestamp = Number(params.get('timestamp')) * 1000;
     if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 600000 || !params.get('code') || !params.get('state')) throw policy.problem('expired_oauth');
     const { rows } = await db.query(`DELETE FROM recovery_oauth_states WHERE state_hash=$1 AND shop_domain=$2
-        AND expires_at>NOW() RETURNING customer_id`, [service.hash(params.get('state')), shopDomain]);
+        AND expires_at>NOW() AND app_client_id=$3
+        RETURNING customer_id`, [service.hash(params.get('state')), shopDomain, app.clientId]);
     if (!rows[0]) throw policy.problem('invalid_oauth_state', 401);
     const savedShop = await shopify.withTokenLock(shopDomain,async (client) => {
-        const prior = await client.query('SELECT customer_id,currency FROM recovery_shops WHERE domain=$1 FOR UPDATE', [shopDomain]);
+        const prior = await client.query('SELECT customer_id,currency,shopify_app_client_id,credentials_encrypted FROM recovery_shops WHERE domain=$1 FOR UPDATE', [shopDomain]);
         if (prior.rows[0] && prior.rows[0].customer_id !== rows[0].customer_id) throw policy.problem('shop_already_connected', 409);
-        const token=await shopify.exchangeAuthorizationCode(shopDomain,params.get('code'));
+        if (prior.rows[0]) shopify.shopApp({domain:shopDomain,...prior.rows[0]}, prior.rows[0].credentials_encrypted ? require('../services/shopify-crypto').decryptShopifyCredentials(prior.rows[0].credentials_encrypted) : {});
+        const token=await shopify.exchangeAuthorizationCode(shopDomain,params.get('code'),app.clientId);
         const scopes=String(token.scope || '').split(',').map((scope)=>scope.trim());
         if (shopify.SCOPES.some((scope)=>!scopes.includes(scope))) throw policy.problem('shopify_scopes_missing',409);
         const shop={domain:shopDomain,mode:'live',credentials_encrypted:shopify.encryptToken(token)};
         const info=await shopify.graphql(shop,'query RecoveryShop { shop { name primaryDomain { host } currencyCode } }');
         if (!['EUR','USD'].includes(info.shop.currencyCode)) throw policy.problem('unsupported_shop_currency',409);
         if (prior.rows[0] && prior.rows[0].currency !== info.shop.currencyCode) throw policy.problem('shop_currency_changed', 409);
-        const saved = await client.query(`INSERT INTO recovery_shops(id,customer_id,domain,storefront_domain,brand,mode,credentials_encrypted,scopes,currency)
-            VALUES($1,$2,$3,$4,$5,'live',$6,$7,$8) ON CONFLICT(domain) DO UPDATE SET
-            credentials_encrypted=EXCLUDED.credentials_encrypted,scopes=EXCLUDED.scopes,enabled=FALSE,approved_at=NULL,webhooks_ready=FALSE RETURNING *`,
-        [randomUUID(), rows[0].customer_id, shopDomain, info.shop.primaryDomain.host, info.shop.name, shop.credentials_encrypted, scopes, info.shop.currencyCode]);
+        const saved = await client.query(`INSERT INTO recovery_shops(id,customer_id,domain,storefront_domain,brand,mode,credentials_encrypted,scopes,currency,shopify_app_client_id)
+            VALUES($1,$2,$3,$4,$5,'live',$6,$7,$8,$9) ON CONFLICT(domain) DO UPDATE SET
+            credentials_encrypted=EXCLUDED.credentials_encrypted,shopify_app_client_id=EXCLUDED.shopify_app_client_id,scopes=EXCLUDED.scopes,enabled=FALSE,approved_at=NULL,webhooks_ready=FALSE RETURNING *`,
+        [randomUUID(), rows[0].customer_id, shopDomain, info.shop.primaryDomain.host, info.shop.name, shop.credentials_encrypted, scopes, info.shop.currencyCode, app.clientId]);
         return saved.rows[0];
     });
     try {

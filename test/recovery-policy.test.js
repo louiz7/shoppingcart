@@ -6,6 +6,8 @@ const { createHmac } = require('node:crypto');
 
 test('Shopify pagination uses a supported checkout sort key and forwards cursors', async (t) => {
     const shopify = require('../src/recovery/shopify');
+process.env.SHOPIFY_CLIENT_ID = 'synthetic-client';
+process.env.SHOPIFY_CLIENT_SECRET = 'synthetic-secret';
     const previousKey = process.env.SHOPIFY_CREDENTIALS_KEY;
     process.env.SHOPIFY_CREDENTIALS_KEY = '11'.repeat(32);
     t.after(() => {

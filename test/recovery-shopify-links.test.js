@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const shopify = require('../src/recovery/shopify');
+process.env.SHOPIFY_CLIENT_ID = 'synthetic-client';
+process.env.SHOPIFY_CLIENT_SECRET = 'synthetic-secret';
 
 const shop = { domain: 'link-test.myshopify.com', storefront_domain: 'checkout.link-test.example', currency: 'USD' };
 const checkout = () => ({

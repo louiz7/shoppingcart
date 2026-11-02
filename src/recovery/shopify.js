@@ -21,6 +21,27 @@ function domain(value) {
     return value;
 }
 
+function appConfig(shopDomain, expectedClientId) {
+    domain(shopDomain);
+    const customDomain = process.env.RECOVERY_SHOPIFY_CUSTOM_DOMAIN;
+    if (customDomain) domain(customDomain);
+    const custom = customDomain === shopDomain;
+    const clientId = custom ? process.env.SHOPIFY_CUSTOM_CLIENT_ID : process.env.SHOPIFY_CLIENT_ID;
+    const secret = custom ? process.env.SHOPIFY_CUSTOM_CLIENT_SECRET : process.env.SHOPIFY_CLIENT_SECRET;
+    if (!clientId || !secret) throw problem('shopify_app_not_configured', 503);
+    if (expectedClientId && expectedClientId !== clientId) throw problem('shopify_app_mismatch', 409);
+    return { clientId, secret, custom };
+}
+
+function shopApp(shop, credentials = {}) {
+    const app = appConfig(shop.domain);
+    const stored = shop.shopify_app_client_id || credentials.app_client_id;
+    if ((shop.shopify_app_client_id && credentials.app_client_id && shop.shopify_app_client_id !== credentials.app_client_id) ||
+        (!stored && app.custom) || (stored && stored !== app.clientId)) throw problem('shopify_app_mismatch', 409);
+    // Only pre-existing primary installations may lack the encrypted app binding.
+    return app;
+}
+
 function signature(raw, supplied, secret = process.env.SHOPIFY_CLIENT_SECRET) {
     if (!secret || typeof supplied !== 'string') return false;
     const expected = createHmac('sha256', secret).update(raw).digest('base64');
@@ -61,14 +82,13 @@ function offlineCredentials(response, now=Date.now()) {
         ...(typeof response.scope==='string' ? {scope:response.scope} : {})};
 }
 
-async function tokenRequest(shopDomain, body) {
-    domain(shopDomain);
-    if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) throw problem('shopify_app_not_configured',503);
+async function tokenRequest(shopDomain, body, expectedClientId) {
+    const app = appConfig(shopDomain, expectedClientId);
     let response;
     try {
         response=await fetch(`https://${shopDomain}/admin/oauth/access_token`,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15000),
             headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({
-                client_id:process.env.SHOPIFY_CLIENT_ID,client_secret:process.env.SHOPIFY_CLIENT_SECRET,...body}).toString()});
+                ...body,client_id:app.clientId,client_secret:app.secret}).toString()});
     } catch { throw problem('shopify_token_service_unavailable',503); }
     let payload;
     try { payload=await response.json(); } catch { throw problem('shopify_token_response_invalid',502); }
@@ -79,7 +99,7 @@ async function tokenRequest(shopDomain, body) {
         if (response.status===403) throw problem('shopify_app_credentials_rejected',503);
         throw problem('shopify_token_service_unavailable',503);
     }
-    return offlineCredentials(payload);
+    return {...offlineCredentials(payload),app_client_id:app.clientId};
 }
 
 async function withTokenLock(shopDomain, operation) {
@@ -90,7 +110,7 @@ async function withTokenLock(shopDomain, operation) {
     });
 }
 
-const exchangeAuthorizationCode = (shopDomain, code) => tokenRequest(shopDomain,{code,expiring:'1'});
+const exchangeAuthorizationCode = (shopDomain, code, clientId) => tokenRequest(shopDomain,{code,expiring:'1'},clientId);
 
 function currentToken(credentials) {
     return !credentials.reauthorization_required && typeof credentials.access_token==='string' && typeof credentials.refresh_token==='string' &&
@@ -100,27 +120,34 @@ function currentToken(credentials) {
 async function accessToken(shop) {
     if (!shop.id) {
         const credentials=decryptShopifyCredentials(shop.credentials_encrypted);
+        shopApp(shop, credentials);
         if (!currentToken(credentials)) throw problem('shopify_reauthorization_required',409);
         return credentials.access_token;
     }
     const result=await withTokenLock(shop.domain,async(client)=>{
-        const {rows}=await client.query(`SELECT s.credentials_encrypted FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
+        const {rows}=await client.query(`SELECT s.credentials_encrypted,s.shopify_app_client_id FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
             WHERE s.id=$1 AND s.domain=$2 AND s.customer_id=$3 AND s.mode='live' AND c.is_active FOR UPDATE OF s`,[shop.id,shop.domain,shop.customer_id]);
         if (!rows[0]?.credentials_encrypted) throw problem('shop_not_connected',409);
         const credentials=decryptShopifyCredentials(rows[0].credentials_encrypted);
+        const app = shopApp({...shop,shopify_app_client_id:rows[0].shopify_app_client_id},credentials);
         if (credentials.reauthorization_required) return {error:problem('shopify_reauthorization_required',409)};
-        if (currentToken(credentials)) return {token:credentials.access_token};
+        if (currentToken(credentials)) {
+            if (!credentials.app_client_id || !rows[0].shopify_app_client_id) await client.query(
+                'UPDATE recovery_shops SET credentials_encrypted=$2,shopify_app_client_id=$3 WHERE id=$1',
+                [shop.id,encryptToken({...credentials,app_client_id:app.clientId}),app.clientId]);
+            return {token:credentials.access_token};
+        }
         let updated;
         try {
             if (credentials.refresh_token) {
                 if (!Number.isFinite(Date.parse(credentials.refresh_token_expires_at)) || Date.parse(credentials.refresh_token_expires_at)<=Date.now()) {
                     throw problem('shopify_reauthorization_required',409);
                 }
-                updated=await tokenRequest(shop.domain,{grant_type:'refresh_token',refresh_token:credentials.refresh_token});
+                updated=await tokenRequest(shop.domain,{grant_type:'refresh_token',refresh_token:credentials.refresh_token},app.clientId);
             } else if (credentials.access_token && !credentials.expires_at) {
                 updated=await tokenRequest(shop.domain,{grant_type:'urn:ietf:params:oauth:grant-type:token-exchange',
                     subject_token:credentials.access_token,subject_token_type:'urn:shopify:params:oauth:token-type:offline-access-token',
-                    requested_token_type:'urn:shopify:params:oauth:token-type:offline-access-token',expiring:'1'});
+                    requested_token_type:'urn:shopify:params:oauth:token-type:offline-access-token',expiring:'1'},app.clientId);
             } else throw problem('shopify_reauthorization_required',409);
         } catch(error) {
             if (error.code!=='shopify_reauthorization_required') throw error;
@@ -128,7 +155,7 @@ async function accessToken(shop) {
                 [shop.id,encryptToken({...credentials,reauthorization_required:true}),error.code]);
             return {error};
         }
-        await client.query('UPDATE recovery_shops SET credentials_encrypted=$2 WHERE id=$1',[shop.id,encryptToken(updated)]);
+        await client.query('UPDATE recovery_shops SET credentials_encrypted=$2,shopify_app_client_id=$3 WHERE id=$1',[shop.id,encryptToken(updated),app.clientId]);
         return {token:updated.access_token};
     });
     if (result.error) throw result.error;
@@ -271,6 +298,6 @@ async function orderStatus(shop, customerId) {
     return { verifiedAt: new Date().toISOString(), orders: data.customer?.orders.nodes || [] };
 }
 
-module.exports = { VERSION, SCOPES, FIELDS, domain, signature, oauthHmac, encryptToken,
+module.exports = { VERSION, SCOPES, FIELDS, domain, appConfig, shopApp, signature, oauthHmac, encryptToken,
     graphql, normalizeCheckout, listCheckouts, refreshCheckout, createDiscount, orderStatus, webhookCapability, registerWebhooks,
     offlineCredentials,withTokenLock,exchangeAuthorizationCode };

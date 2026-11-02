@@ -16,6 +16,8 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
     const shopify = require('../src/recovery/shopify');
     const tel = require('../src/recovery/telephony');
     const hooks = require('../src/recovery/webhooks');
+    process.env.SHOPIFY_CLIENT_ID = 'synthetic-client';
+    process.env.SHOPIFY_CLIENT_SECRET = 'synthetic-secret';
     const tenantIds = [];
     const originalFetch = global.fetch;
     global.fetch = async () => { throw new Error('External network is forbidden in recovery integration tests'); };
