@@ -15,8 +15,8 @@ test('agent profile allows bounded names and fixed choices with explicit AI temp
     for (const language of ['de','en']) for (const persona of ['assistant','founder']) {
         const result = profile.forShop({ brand: 'Synthetic shop',agent_profile: { ...profile.DEFAULT,language,persona } });
         assert.match(result.greeting,language==='de' ? /KI-Assistenz/ : /AI assistant/);
-        assert.match(result.greeting,language==='de' ? /Rückruf/ : /callback/);
-        assert.match(result.greeting,language==='de' ? /passt es gerade/ : /good time/);
+        assert.doesNotMatch(result.greeting,/Rückruf|callback|Spreche ich|Am I speaking/);
+        assert.match(result.greeting,language==='de' ? /Passt es gerade kurz\?/ : /Is now a good time\?/);
         if (persona==='founder') assert.match(result.greeting,language==='de' ? /im Auftrag des Gründungsteams/ : /on behalf of the founding team/);
     }
     assert.equal(profile.forShop({ brand: 'Synthetic shop' }).voice,'male');

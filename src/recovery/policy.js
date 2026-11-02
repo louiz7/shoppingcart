@@ -117,6 +117,13 @@ function cartHash(snapshot) {
             i.originalUnitCents, i.currentPriceCents, i.available]) })).digest('hex');
 }
 
+function conversationPermission(text, prompt) {
+    const answer = String(text || '').toLowerCase().replace(/\u2019/g,"'");
+    return /(?:\bpasst (?:es|das) (?:gerade|kurz)\b|\bis (?:now|this) (?:a )?good time\b)/i.test(String(prompt)) &&
+        /^\s*(ja|yes|sure|okay|ok|klar|gerne|natürlich|of course|go ahead|passt|es passt|das passt)\b/i.test(answer) &&
+        !/\b(nein|nicht|kein|keine|falsch|später|mailbox|no|not|never|wrong|later|busy|voicemail|don'?t|can'?t)\b/i.test(answer) && !stopSignal(answer);
+}
+
 function explicitSmsRequest(text) {
     const normalized = String(text || '').toLowerCase().replace(/\u2019/g,"'").replace(/[.!?,]/g, ' ').replace(/\s+/g, ' ').trim();
     if (/\b(nein|nicht|kein|keine|stop|widerruf|no|not|never|without|cannot|refuse|decline|cancel|don'?t|didn'?t|can'?t|won'?t|wouldn'?t|shouldn'?t|couldn'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|aren'?t|weren'?t)\b/.test(normalized)) return false;
@@ -141,4 +148,4 @@ function experimentReport(rows, costsCents = 0) {
 }
 
 module.exports = { DEFAULT_RULES, problem, rules, cents, phone, contactKey, assignment, inWindow,
-    eligibility, offer, checkoutUrl, cartHash, explicitSmsRequest, stopSignal, experimentReport };
+    eligibility, offer, checkoutUrl, cartHash, conversationPermission, explicitSmsRequest, stopSignal, experimentReport };

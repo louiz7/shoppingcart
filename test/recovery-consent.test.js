@@ -4,6 +4,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const policy = require('../src/recovery/policy');
 
+test('conversation permission means willingness after the short timing question, never verified identity',() => {
+    for (const [prompt,answer] of [['Passt es gerade kurz?','Ja, gerne.'],['Is now a good time?','Yes, go ahead.']]) {
+        assert.equal(policy.conversationPermission(answer,prompt),true);
+        for (const refusal of ['Nein.','Ja, aber nicht jetzt.','Yes, but not now.','Yes, wrong person.',
+            'Maybe later.','Voicemail','Ja, später.','No, thanks.']) assert.equal(policy.conversationPermission(refusal,prompt),false,refusal);
+    }
+    assert.equal(policy.conversationPermission('Ja.','Spreche ich mit der richtigen Person?'),false);
+    assert.equal(policy.conversationPermission('Yes.','Would you like a discount?'),false);
+});
+
 test('English SMS consent rejects negation and requires an explicit link request', () => {
     for (const text of ['Yes, please send me the link by SMS.','Please text me the checkout link.','Yes, the link by SMS please.']) {
         assert.equal(policy.explicitSmsRequest(text),true,text);

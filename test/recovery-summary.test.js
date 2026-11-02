@@ -126,6 +126,9 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         assert.deepEqual(summary, { asOf: asOf.toISOString(), shops: [{ id: s.id, brand: s.brand, domain: s.domain,
             timeZone: 'Europe/Berlin', date: '2026-11-02', callsToday: 3, confirmedCheckoutsToday: 1 }] });
         assert.equal((await service.dailySummary(outsider, asOf)).shops[0].confirmedCheckoutsToday, 1);
+        assert.deepEqual((await service.dailySummary(owner,asOf,s.id)).shops,summary.shops);
+        assert.deepEqual((await service.dailySummary(owner,asOf,foreign.id)).shops,[]);
+        await assert.rejects(service.dailySummary(owner,asOf,'invalid-shop'),/shop_not_found/);
         await db.query('UPDATE customers SET is_active=FALSE WHERE id=$1', [outsider]);
         assert.deepEqual((await service.dailySummary(outsider, asOf)).shops, []);
     });
@@ -174,7 +177,7 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         const s = await shop(await tenant()), c = await checkout(s);
         const active = await call(s, c, null, null, 'reserved');
         const initial = await service.recordConnection(active);
-        assert.equal(initial.identityRequired, true);
+        assert.equal(initial.contactConfirmed, false);
         const first = (await db.query('SELECT dialed_at,connected_at FROM recovery_calls WHERE id=$1', [active.id])).rows[0];
         await service.recordConnection(active);
         assert.deepEqual((await db.query('SELECT dialed_at,connected_at FROM recovery_calls WHERE id=$1', [active.id])).rows[0], first);

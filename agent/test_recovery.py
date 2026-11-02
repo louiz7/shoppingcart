@@ -50,7 +50,7 @@ class RecoveryContracts(OfflineRecoveryCase):
         self.assertTrue(registered[0])
         agent = module.RecoveryAgent('synthetic-token', {'brand': 'Test', 'brandVoice': 'Friendly'}, None)
         self.assertEqual({tool.info.name for tool in agent.tools}, {
-            'confirm_identity', 'get_cart_context', 'get_offer', 'send_checkout_link',
+            'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link',
             'get_order_status', 'stop_contact', 'log_outcome', 'end_call',
         })
         for tool in agent.tools:

@@ -125,18 +125,18 @@ toolsRouter.use(internal, handle(async (req, res) => {
     switch (name) {
     case 'context': result = await service.getContext(call); break;
     case 'connected': result = await service.recordConnection(call); break;
-    case 'confirm_identity': result = await service.confirmIdentity(call); break;
+    case 'confirm_contact': result = await service.confirmContact(call); break;
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
     case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop'); break;
     case 'outcome': result = await service.outcome(call, req.body); break;
     case 'order_status': {
-        if (!call.identity_verified) throw policy.problem('identity_required', 409);
+        if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);
         const shop = await service.shopFor(call.customer_id, call.shop_id);
         const ctx = await service.state(db, shop, call.checkout_id);
         if (ctx.contact.stopped_at || !shop.enabled) throw policy.problem('contact_stopped', 409);
-        result = await shopify.orderStatus(shop, ctx.checkout.snapshot.customerId);
+        result = await shopify.orderStatus(shop, ctx.checkout);
         break;
     }
     case 'end': result = await service.endCall(call); break;

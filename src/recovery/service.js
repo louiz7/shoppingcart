@@ -269,17 +269,18 @@ async function endCall(call) {
 }
 
 async function getContext(call) {
+    // Legacy identity_verified records permission to continue this conversation, not verified personal identity.
     if (!call.identity_verified) {
         const shop = await shopFor(call.customer_id, call.shop_id);
         const ctx = await state(db, shop, call.checkout_id);
         const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
-        return { brand: shop.brand, brandVoice: shop.brand_voice, agentProfile: agentProfile.forShop(shop), identityRequired: true };
+        return { brand: shop.brand, brandVoice: shop.brand_voice, agentProfile: agentProfile.forShop(shop), contactConfirmed: false };
     }
     const ctx = await refresh(call.customer_id, call.shop_id, call.checkout_id);
     const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
-    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop),
+    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop), contactConfirmed: true,
         cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
             shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
         maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,
@@ -297,12 +298,13 @@ async function recordConnection(call) {
     return getContext(call);
 }
 
-async function dailySummary(customerId, asOf = new Date()) {
+async function dailySummary(customerId, asOf = new Date(), shopId = null) {
     if (!(asOf instanceof Date) || !Number.isFinite(+asOf)) throw policy.problem('invalid_summary_time');
+    if (shopId!==null && !uuid(shopId)) throw policy.problem('shop_not_found',404);
     const { rows } = await db.query(`WITH shops AS (
         SELECT s.id,s.brand,s.domain,s.currency,COALESCE(s.rules->>'timezone','Europe/Berlin') AS timezone
         FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
-        WHERE s.customer_id=$1 AND c.is_active AND s.mode='live'
+        WHERE s.customer_id=$1 AND c.is_active AND s.mode='live' AND ($3::uuid IS NULL OR s.id=$3)
     ), days AS (
         SELECT *,to_char($2::timestamptz AT TIME ZONE timezone,'YYYY-MM-DD') AS date,
             date_trunc('day',$2::timestamptz AT TIME ZONE timezone) AT TIME ZONE timezone AS starts_at,
@@ -318,12 +320,12 @@ async function dailySummary(customerId, asOf = new Date()) {
                     AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                     AND ((o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id)
             )) AS "confirmedCheckoutsToday"
-        FROM days d ORDER BY d.brand,d.id`, [customerId, asOf.toISOString()]);
+        FROM days d ORDER BY d.brand,d.id`, [customerId, asOf.toISOString(),shopId]);
     return { asOf: asOf.toISOString(), shops: rows };
 }
 
 async function getOffer(call, percent, discountId) {
-    if (!call.identity_verified) throw policy.problem('identity_required', 409);
+    if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);
     const current = await refresh(call.customer_id, call.shop_id, call.checkout_id);
     const previous = await db.query(`SELECT data FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
     const selected = discountId ?? previous.rows[0]?.data.discountId;
@@ -424,7 +426,7 @@ async function authorizeLink(client, call, shop, ctx, discountProof) {
 }
 
 async function sendLink(call) {
-    if (!call.identity_verified) throw policy.problem('identity_required', 409);
+    if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);
     await refresh(call.customer_id, call.shop_id, call.checkout_id);
     const initialDiscountProof = await discounts.offerProof(call);
     const action = await transaction(async (client) => {
@@ -485,16 +487,24 @@ async function recordTranscript(call, input) {
     return { recorded: true };
 }
 
-async function confirmIdentity(call) {
-    const { rows } = await db.query(`SELECT kind,data FROM recovery_events WHERE call_id=$1
-        AND kind IN ('user_transcript','assistant_transcript') AND created_at>NOW()-INTERVAL '2 minutes'
-        ORDER BY created_at DESC LIMIT 2`, [call.id]);
-    if (rows[0]?.kind !== 'user_transcript' || rows[1]?.kind !== 'assistant_transcript' ||
-        !/\b(ja|genau|richtig|am apparat|bin ich)\b/i.test(rows[0].data.text) ||
-        /\b(nein|nicht|falsch)\b/i.test(rows[0].data.text) ||
-        !/(person|rückruf|spreche ich)/i.test(rows[1].data.text)) throw policy.problem('identity_confirmation_required', 409);
-    await db.query('UPDATE recovery_calls SET identity_verified=TRUE WHERE id=$1', [call.id]);
-    return { identityVerified: true };
+async function confirmContact(call) {
+    return transaction(async (client) => {
+        const shop = await shopFor(call.customer_id,call.shop_id,client,true);
+        const ctx = await state(client,shop,call.checkout_id,true);
+        const denied = policy.eligibility(ctx,new Date(),'action',call.is_test===true);
+        if (denied) throw policy.problem(denied,409);
+        const { rows } = await client.query(`SELECT kind,data FROM recovery_events WHERE call_id=$1 AND shop_id=$2
+            AND kind IN ('user_transcript','assistant_transcript') AND created_at>NOW()-INTERVAL '2 minutes'
+            ORDER BY created_at DESC LIMIT 2`,[call.id,shop.id]);
+        if (rows[0]?.kind!=='user_transcript' || rows[1]?.kind!=='assistant_transcript' ||
+            !policy.conversationPermission(rows[0].data.text,rows[1].data.text)) throw policy.problem('contact_confirmation_required',409);
+        const confirmed = await client.query(`UPDATE recovery_calls SET identity_verified=TRUE
+            WHERE id=$1 AND shop_id=$2 AND checkout_id=$3 AND contact_key=$4
+            AND expires_at>NOW() AND ended_at IS NULL AND status IN ('reserved','dialing','connected') RETURNING id`,
+        [call.id,shop.id,ctx.checkout.id,ctx.checkout.contact_key]);
+        if (!confirmed.rowCount) throw policy.problem('invalid_call_token',401);
+        return { contactConfirmed: true };
+    });
 }
 
 async function outcome(call, input) {
@@ -553,4 +563,4 @@ async function dashboard(customerId) {
 }
 
 module.exports = { uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
-    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmIdentity, outcome, dashboard };
+    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmContact, outcome, dashboard };

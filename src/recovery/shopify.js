@@ -287,15 +287,21 @@ async function createDiscount(shop, snapshot, code, percent, endsAt) {
     return data.discountCodeBasicCreate.codeDiscountNode.id;
 }
 
-async function orderStatus(shop, customerId) {
-    if (!customerId) throw problem('order_identity_missing', 409);
-    const data = await graphql(shop, `query RecoveryOrders($id:ID!) {
-        customer(id:$id) { orders(first:5,reverse:true,sortKey:CREATED_AT) { nodes {
-          name createdAt test displayFinancialStatus displayFulfillmentStatus
-          fulfillments { status displayStatus trackingInfo { company number } }
-        } } }
-    }`, { id: customerId });
-    return { verifiedAt: new Date().toISOString(), orders: data.customer?.orders.nodes || [] };
+async function orderStatus(shop, checkout) {
+    if (!checkout || checkout.shop_id!==shop.id || typeof checkout.id!=='string') throw problem('order_checkout_missing',409);
+    const { rows } = await require('./store').db.query(`SELECT o.external_id FROM recovery_orders o
+        JOIN recovery_checkouts c ON c.id=$2 AND c.shop_id=o.shop_id WHERE o.shop_id=$1 AND
+        (o.recovery_checkout_id=c.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id)
+        ORDER BY o.ordered_at DESC LIMIT 1`,[shop.id,checkout.id]);
+    if (!rows.length) return { verifiedAt: new Date().toISOString(),orders: [] };
+    if (!/^[0-9]+$/.test(rows[0].external_id)) throw problem('order_unverified',409);
+    const id = `gid://shopify/Order/${rows[0].external_id}`;
+    const data = await graphql(shop, `query RecoveryOrder($id:ID!) {
+        node(id:$id) { ... on Order { id test displayFinancialStatus displayFulfillmentStatus } }
+    }`,{ id });
+    if (data.node?.id!==id) throw problem('order_unverified',409);
+    return { verifiedAt: new Date().toISOString(),orders: [{ test: data.node.test,
+        displayFinancialStatus: data.node.displayFinancialStatus,displayFulfillmentStatus: data.node.displayFulfillmentStatus }] };
 }
 
 module.exports = { VERSION, SCOPES, FIELDS, domain, appConfig, shopApp, signature, oauthHmac, encryptToken,

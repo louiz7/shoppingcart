@@ -16,8 +16,8 @@ function forShop(shop) {
     const profile = validate(shop.agent_profile ?? DEFAULT);
     const owner = profile.persona==='founder';
     const greeting = profile.language==='de'
-        ? `Hallo, hier ist ${profile.name}, die KI-Assistenz ${owner ? 'im Auftrag des Gründungsteams von' : 'von'} ${shop.brand}. Spreche ich mit der Person, die um einen Rückruf gebeten hat, und passt es gerade?`
-        : `Hi, I'm ${profile.name}, the AI assistant ${owner ? 'calling on behalf of the founding team at' : 'for'} ${shop.brand}. Am I speaking with the person who requested a callback, and is now a good time?`;
+        ? `Hallo, hier ist ${profile.name}, die KI-Assistenz ${owner ? 'im Auftrag des Gründungsteams von' : 'von'} ${shop.brand}. Passt es gerade kurz?`
+        : `Hi, I'm ${profile.name}, the AI assistant ${owner ? 'calling on behalf of the founding team at' : 'for'} ${shop.brand}. Is now a good time?`;
     return { ...profile, greeting };
 }
 

@@ -92,7 +92,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             const ended = await send('end');
             assert.equal(ended.status, 200); assert.deepEqual(await ended.json(), { ended: true });
             assert.equal(hangup.mock.calls.at(-1).arguments[0], `recovery-${call.id}`);
-            for (const name of ['context','connected','confirm_identity','offer','send_link','order_status']) {
+            for (const name of ['context','connected','confirm_contact','offer','send_link','order_status']) {
                 assert.equal((await send(name)).status, 401);
             }
             assert.equal((await send('end', 'c'.repeat(64))).status, 401);
@@ -164,7 +164,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             assert.equal(call.is_test,true);
             assert.deepEqual((await db.query('SELECT arm,enrolled_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0],{arm:null,enrolled_at:null});
             assert.equal((await db.query('SELECT arm FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].arm,null);
-            assert.equal((await s.getContext({...call,customer_id:f.customerId})).identityRequired,true);
+            assert.equal((await s.getContext({...call,customer_id:f.customerId})).contactConfirmed,false);
             await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/contact_busy/);
             await s.endCall({...call,customer_id:f.customerId});
             const retry=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
@@ -252,15 +252,21 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.ok(hangup.mock.calls.length > 0);
     });
 
-    await t.test('product information stays hidden until identity confirmation is grounded in transcripts', async () => {
+    await t.test('product information stays hidden until conversation permission is grounded in transcripts', async () => {
         const f = await fixture(); await activate(f); const call = { ...await fakeCall(f), identity_verified: false };
+        await db.query('UPDATE recovery_calls SET identity_verified=FALSE WHERE id=$1',[call.id]);
         const initial = await s.getContext(call);
-        assert.equal(initial.cart, undefined); assert.equal(initial.identityRequired, true);
-        await assert.rejects(s.getOffer(call, 10), /identity_required/);
-        await assert.rejects(s.confirmIdentity(call), /identity_confirmation_required/);
-        await s.recordTranscript(call, { role: 'assistant', eventId: randomUUID(), text: 'Spreche ich mit der Person, die den Rückruf erbeten hat?' });
+        assert.equal(initial.cart, undefined); assert.equal(initial.contactConfirmed, false);
+        await assert.rejects(s.getOffer(call, 10), /contact_confirmation_required/);
+        await assert.rejects(s.confirmContact(call), /contact_confirmation_required/);
+        await s.recordTranscript(call, { role: 'assistant',eventId: randomUUID(),text: 'Passt es gerade kurz?' });
+        await s.recordTranscript(call, { role: 'user',eventId: randomUUID(),text: 'Ja, aber später.' });
+        await assert.rejects(s.confirmContact(call), /contact_confirmation_required/);
+        assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,false);
+        await s.recordTranscript(call, { role: 'assistant', eventId: randomUUID(), text: 'Hallo, hier ist Rescova, die KI-Assistenz von Test. Passt es gerade kurz?' });
         await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Ja, genau.' });
-        assert.equal((await s.confirmIdentity(call)).identityVerified, true);
+        assert.equal((await s.confirmContact(call)).contactConfirmed, true);
+        assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,true);
     });
 
     await t.test('offers are single-use intents and stale carts invalidate the existing quote', async () => {
