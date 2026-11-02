@@ -1,0 +1,4 @@
+# Separate environment: GPT-Live requires 1.8; the existing Deepslate worker remains pinned to 1.6.5.
+livekit-agents[openai]==1.8.10
+python-dotenv==1.2.2
+aiohttp>=3.13.0,<4

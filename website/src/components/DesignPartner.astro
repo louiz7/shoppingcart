@@ -1,0 +1,149 @@
+---
+
+---
+
+<section class="partner" id="design-partner">
+  <div class="partner__card" data-reveal>
+    <div class="partner__image" aria-hidden="true">
+      <img src="/assets/design-partner.png" alt="" width="200" height="300" />
+    </div>
+    <div class="partner__content">
+      <div class="partner__header">
+        <h2 class="section-heading partner__heading">
+          Wir suchen Design Partner <br />im Forderungs&shy;management
+        </h2>
+        <p class="partner__sub">
+          Wir entwickeln Evi gemeinsam mit wenigen Teams, die hohe
+          Kontaktvolumina, klare Prozessregeln und den Anspruch haben,
+          Kundenkommunikation verantwortungsvoll zu skalieren.
+        </p>
+      </div>
+      <button type="button" class="btn btn--dark" data-pilot-open>
+        <span class="btn__top">Jetzt Pilot besprechen</span>
+      </button>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* Pinned card: scrolls up until vertically centered in the viewport, then
+     stays fixed there while the CTA card below scrolls up and covers it. */
+  .partner {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding-block: 240px;
+    padding-inline: 24px;
+  }
+
+  /* Below 1100px the card heights become content-driven and no longer match
+     the CTA card, so the cover effect breaks: un-pin and scroll normally. */
+  @media (max-width: 1099px) {
+    .partner {
+      position: static;
+      min-height: 0;
+      padding-block: 240px 0;
+    }
+  }
+
+  @media (max-width: 599px) {
+    .partner {
+      padding-block: 100px 0;
+    }
+  }
+
+  .partner__card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 48px;
+    width: 100%;
+    max-width: 1200px;
+    height: 400px;
+    margin-inline: auto;
+    padding: 80px 160px;
+    border: 1px solid #e1e1e1;
+    border-radius: 30px;
+    background: var(--color-white);
+    box-shadow: 0 8px 0 #e1e1e1;
+  }
+
+  .partner__image {
+    flex-shrink: 0;
+    width: 200px;
+    height: 300px;
+  }
+
+  .partner__image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+
+  .partner__content {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 32px;
+    max-width: 550px;
+  }
+
+  .partner__header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .partner__sub {
+    font-weight: 500;
+    font-size: 18px;
+    line-height: 1.5;
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  @media (max-width: 1099px) {
+    .partner__card {
+      height: auto;
+      padding: 64px 48px;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .partner__card {
+      flex-direction: column;
+      gap: 32px;
+      text-align: center;
+    }
+
+    .partner__content,
+    .partner__header {
+      align-items: center;
+    }
+  }
+
+  @media (max-width: 599px) {
+    .partner__card {
+      padding: 48px 24px;
+      border-radius: 20px;
+    }
+
+    .partner__image {
+      width: 140px;
+      height: 210px;
+    }
+
+    .partner__heading br {
+      display: none;
+    }
+
+    .partner__sub {
+      font-size: 16px;
+    }
+  }
+</style>

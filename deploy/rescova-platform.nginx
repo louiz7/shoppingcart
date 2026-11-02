@@ -1,0 +1,9 @@
+# Included inside the HTTPS server block for rescova.de. Keep old dashboard
+# links working while the dashboard itself lives at app.rescova.de.
+location = /platform {
+    return 308 https://app.rescova.de/;
+}
+
+location ^~ /platform/ {
+    rewrite ^/platform/(.*)$ https://app.rescova.de/$1 permanent;
+}

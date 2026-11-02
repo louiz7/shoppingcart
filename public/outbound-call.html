@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Evi · Outbound Test Call</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 30% 20%, #1a0f2e, #0a0512 70%);
+      color: #eee; font-family: system-ui, -apple-system, sans-serif;
+    }
+    .card {
+      width: 100%; max-width: 380px; padding: 40px 32px; text-align: center;
+      background: rgba(22, 14, 38, 0.7); backdrop-filter: blur(20px);
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 20px;
+      box-shadow: 0 10px 60px rgba(0,0,0,0.4);
+    }
+    h1 { margin: 0 0 8px; font-size: 26px; font-weight: 600; letter-spacing: -0.5px; }
+    .sub { color: #b6a8d0; font-size: 14px; margin: 0 0 28px; }
+
+    input {
+      width: 100%; padding: 14px 16px; font-size: 16px; text-align: center;
+      background: rgba(255,255,255,0.06); color: #eee;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 12px;
+      font-family: monospace; margin-bottom: 16px;
+    }
+    input:focus { outline: none; border-color: #a855f7; }
+
+    button.call {
+      width: 100%; padding: 16px; border: 0; border-radius: 12px;
+      background: linear-gradient(135deg, #ec4899, #a855f7);
+      color: white; font-size: 16px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 8px 32px rgba(168, 85, 247, 0.4);
+      transition: transform 0.15s;
+    }
+    button.call:hover:not(:disabled) { transform: scale(1.02); }
+    button.call:disabled { background: #333; cursor: not-allowed; box-shadow: none; }
+
+    .status { margin-top: 20px; min-height: 22px; font-size: 14px; color: #b6a8d0; }
+    .status.err { color: #fca5a5; }
+    .status.ok  { color: #86efac; }
+    .footnote { margin-top: 24px; font-size: 11px; color: #6b6680; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Evi · Test-Anruf</h1>
+    <p class="sub">Ruft die eingegebene Nummer als "Rescova Agent - Evi" an.</p>
+
+    <input id="number" type="tel" placeholder="+4917612345678" autocomplete="tel" />
+    <button id="call" class="call">Anrufen</button>
+    <div id="status" class="status">bereit</div>
+    <div class="footnote">Echter Anruf über LiveKit SIP — kein Test ohne Wählton.</div>
+  </div>
+
+  <script>
+    const input = document.getElementById('number');
+    const btn = document.getElementById('call');
+    const status = document.getElementById('status');
+
+    function setStatus(text, cls = '') {
+      status.textContent = text;
+      status.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    async function placeCall() {
+      const targetNumber = input.value.trim();
+      if (!/^\+[1-9]\d{6,14}$/.test(targetNumber)) {
+        setStatus('Bitte im E.164-Format eingeben, z.B. +4917612345678', 'err');
+        return;
+      }
+      btn.disabled = true;
+      setStatus('rufe an…');
+      try {
+        const r = await fetch('v1/outbound-call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetNumber }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.message || data.error || ('HTTP ' + r.status));
+        setStatus('Anruf gestartet — Raum ' + data.room, 'ok');
+      } catch (e) {
+        setStatus('Fehler: ' + e.message, 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener('click', placeCall);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') placeCall(); });
+  </script>
+</body>
+</html>

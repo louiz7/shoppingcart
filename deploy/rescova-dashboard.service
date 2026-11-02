@@ -1,0 +1,25 @@
+[Unit]
+Description=Rescova customer dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rescova/dashboard
+EnvironmentFile=/opt/rescova/.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3001
+Environment=ORIGIN=https://app.rescova.de
+Environment=BODY_SIZE_LIMIT=26M
+# The shared .env also contains PORT=3000 for the API. Command-scoped values
+# must win for the standalone dashboard process.
+ExecStart=/usr/bin/env NODE_ENV=production HOST=127.0.0.1 PORT=3001 ORIGIN=https://app.rescova.de /usr/bin/node build/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rescova-dashboard
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,130 @@
+---
+const steps = [
+  {
+    title: 'Kontakt herstellen',
+    text: 'Evi ruft Ihren Kunden persönlich an. Ein echtes Gespräch statt einer weiteren Mahnung, die im Postfach verschwindet.',
+    image: '/assets/how-step-1.png',
+  },
+  {
+    title: 'Ursache finden',
+    text: 'Evi fragt nach, warum nicht gezahlt wurde, und hört zu: Vergessen, Liquiditätsengpass oder andere Einwände?',
+    image: '/assets/how-step-2.png',
+  },
+  {
+    title: 'Lösung verhandeln',
+    text: 'Evi erklärt Zahlungsoptionen, nimmt Zahlungszusagen auf und kann Teilzahlungen oder Ratenplan-Anfragen bearbeiten.',
+    image: '/assets/how-step-3.png',
+  },
+  {
+    title: 'Vereinbarung umsetzen',
+    text: 'Evi versendet Zahlungslinks und Bestätigungen, dokumentiert Vereinbarungen in Ihrem System und übernimmt zugelassene Follow-ups.',
+    image: '/assets/how-step-4.png',
+  },
+];
+---
+
+<section class="how" id="funktionsweise">
+  <div class="container how__inner">
+    <div class="how__header" data-reveal>
+      <span class="badge">Arbeitsweise</span>
+      <h2 class="section-heading">
+        Ist eine Rechnung überfällig, <br /><em>legt Evi sofort los und klärt den Fall</em>
+      </h2>
+    </div>
+    <div class="how__grid">
+      {
+        steps.map((step, index) => (
+          <div class="how__item" data-reveal style={`--reveal-delay: ${index * 0.1}s`}>
+            <img
+              class="how__item-image"
+              src={step.image}
+              alt=""
+              width="282"
+              height="220"
+            />
+            <div class="how__item-text">
+              <h3>{step.title}</h3>
+              <p>{step.text}</p>
+            </div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .how {
+    padding-top: 240px;
+  }
+
+  .how__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .how__header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    max-width: 650px;
+  }
+
+  .how__grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+  }
+
+  .how__item {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .how__item-image {
+    width: 100%;
+    height: 220px;
+    border: 1px solid var(--color-border);
+    border-radius: 30px;
+    object-fit: cover;
+    background: var(--color-white);
+  }
+
+  .how__item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .how__item-text h3 {
+    font-weight: 500;
+    font-size: 20px;
+    line-height: 1.3;
+  }
+
+  .how__item-text p {
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 1023px) {
+    .how__grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 599px) {
+    .how {
+      padding-top: 100px;
+    }
+
+    .how__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

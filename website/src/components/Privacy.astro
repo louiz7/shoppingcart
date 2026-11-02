@@ -1,0 +1,140 @@
+---
+
+---
+
+<section class="privacy" id="datenschutz">
+  <div class="container privacy__inner">
+    <div class="privacy__header" data-reveal>
+      <span class="badge">Datenschutz &amp; Sicherheit</span>
+      <h2 class="section-heading">
+        Made in Germany, mit den <br />höchsten Datenschutzansprüchen
+      </h2>
+    </div>
+    <div class="privacy__grid">
+      <div class="privacy__card" data-reveal>
+        <img
+          class="privacy__card-image"
+          src="/assets/privacy-card-1.png"
+          alt=""
+          width="384"
+          height="220"
+        />
+        <div class="privacy__card-text">
+          <h3>Datenverarbeitung in Deutschland</h3>
+          <p>Evi ist für eine Verarbeitung und Speicherung von Kundendaten in Deutschland konzipiert.</p>
+        </div>
+      </div>
+      <div class="privacy__card" data-reveal>
+        <img
+          class="privacy__card-image"
+          src="/assets/privacy-card-2.png"
+          alt=""
+          width="384"
+          height="220"
+        />
+        <div class="privacy__card-text">
+          <h3>Kontrolliertes Agentenmandat</h3>
+          <p>Evi handelt nur innerhalb Ihrer Regeln. Außerhalb davon eskaliert sie an Ihr Team.</p>
+        </div>
+      </div>
+      <div class="privacy__card" data-reveal>
+        <img
+          class="privacy__card-image"
+          src="/assets/privacy-card-3.png"
+          alt=""
+          width="384"
+          height="220"
+        />
+        <div class="privacy__card-text">
+          <h3>Volle Nachvollziehbarkeit</h3>
+          <p>Gesprächsverläufe, Aktionen und Übergaben sind pro Fall dokumentiert und prüfbar.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .privacy {
+    padding-top: 240px;
+  }
+
+  .privacy__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  .privacy__header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .privacy__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  .privacy__card:nth-child(2) {
+    --reveal-delay: 0.1s;
+  }
+
+  .privacy__card:nth-child(3) {
+    --reveal-delay: 0.2s;
+  }
+
+  .privacy__card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 30px;
+    background: var(--color-white);
+  }
+
+  .privacy__card-image {
+    width: 100%;
+    height: 220px;
+    border-radius: 16px;
+    object-fit: cover;
+  }
+
+  .privacy__card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .privacy__card-text h3 {
+    font-weight: 500;
+    font-size: 20px;
+    line-height: 1.3;
+  }
+
+  .privacy__card-text h3 em {
+    font-style: italic;
+  }
+
+  .privacy__card-text p {
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  @media (max-width: 1023px) {
+    .privacy__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 599px) {
+    .privacy {
+      padding-top: 100px;
+    }
+  }
+</style>

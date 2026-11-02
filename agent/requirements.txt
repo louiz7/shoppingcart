@@ -1,0 +1,9 @@
+# Pinned: livekit-agents 1.6.6 (2026-07-18) broke two-way audio with the
+# Deepslate realtime plugin (generation text stream never closes -> session
+# stops responding after the greeting). 1.6.5 is the known-good version the
+# existing production deployment ran.
+deepslate-livekit==0.1.14
+deepslate-core==0.1.14
+livekit-agents==1.6.5
+python-dotenv>=1.0.0
+aiohttp>=3.9

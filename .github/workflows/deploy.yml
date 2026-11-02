@@ -1,0 +1,169 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    if: github.repository == 'louiz7/rescova'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # Restarting rescova-agent drops any in-progress phone call, so only do
+      # it when this push actually changed agent code — a frontend-only push
+      # (e.g. the marketing site) must not kill a live call.
+      - name: Detect if agent changed
+        id: agentchanged
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q '^agent/'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          # Astro 7 (frontend build) needs >= 22.12; the server's own Node
+          # version is independent of this.
+          node-version: 22
+
+      - name: Build frontend
+        working-directory: website
+        env:
+          PUBLIC_API_BASE_URL: https://api.rescova.de
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rsync backend source
+        run: |
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'node_modules' \
+            --exclude '.env' \
+            --exclude 'website/node_modules' \
+            --exclude 'website/.env' \
+            --exclude 'website/dist' \
+            --exclude 'website/.astro' \
+            --exclude 'agent/.venv' \
+            --exclude 'agent/data' \
+            --exclude '.venv' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            ./ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/rescova/"
+
+      - name: Rsync built frontend
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            website/dist/ "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/rescova/website/dist/"
+
+      # Sync app secrets held in GitHub into the server's .env (which is
+      # excluded from the rsync above and otherwise hand-maintained). Upserts
+      # only these keys so the other server-side secrets are left untouched.
+      - name: Sync Telegram secrets to server .env
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "
+            set -e
+            cd /opt/rescova
+            touch .env
+            grep -vE '^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)=' .env > .env.new || true
+            printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' '$TELEGRAM_BOT_TOKEN' '$TELEGRAM_CHAT_ID' >> .env.new
+            mv .env.new .env
+            chmod 600 .env
+          "
+
+      - name: Install deps, migrate, build dashboard, and restart services
+        env:
+          AGENT_CHANGED: ${{ steps.agentchanged.outputs.changed }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" "
+            set -e
+            cd /opt/rescova
+            npm install --omit=dev
+            node scripts/migrate.js
+            cd dashboard
+            # Include optional platform bindings required by Vite's native
+            # build tools when compiling on this GNU/Linux x64 server.
+            npm ci --include=optional
+            npm run build
+            install -m 0644 ../deploy/rescova-dashboard.service /etc/systemd/system/rescova-dashboard.service
+            systemctl daemon-reload
+            systemctl enable rescova-dashboard
+            systemctl restart rescova-dashboard
+            cd ..
+            systemctl restart rescova-api
+            # Retired with the legacy Deliah browser/demo flow. Stop any
+            # previously installed unit even though its source was removed.
+            systemctl disable --now deliahapi-admin 2>/dev/null || true
+            systemctl disable --now rescova-admin 2>/dev/null || true
+            if [ '$AGENT_CHANGED' = 'true' ]; then
+              echo 'agent code changed -> restarting rescova-agent'
+              systemctl restart rescova-agent 2>/dev/null || true
+            else
+              echo 'agent unchanged -> leaving rescova-agent running (not dropping live calls)'
+            fi
+            nginx -t && systemctl reload nginx
+          "
+
+      - name: Route dashboard through app.rescova.de
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" 'bash -s' <<'REMOTE'
+            set -eu
+
+            nginx_config="$(readlink -f /etc/nginx/sites-enabled/rescova)"
+            test -f "$nginx_config"
+            snippet=/etc/nginx/snippets/rescova-platform.conf
+            include_line='include /etc/nginx/snippets/rescova-platform.conf;'
+
+            install -d -m 0755 /etc/nginx/snippets
+            install -m 0644 /opt/rescova/deploy/rescova-platform.nginx "$snippet"
+            install -m 0644 /opt/rescova/deploy/rescova-app.nginx /etc/nginx/sites-available/rescova-app
+            ln -sfn /etc/nginx/sites-available/rescova-app /etc/nginx/sites-enabled/rescova-app
+
+            if ! grep -qF "$include_line" "$nginx_config"; then
+              backup="$(mktemp)"
+              cp -- "$nginx_config" "$backup"
+
+              patched="$(mktemp)"
+              awk '
+                /^[[:space:]]*root[[:space:]]*\/opt\/rescova\/website\/dist;[[:space:]]*$/ {
+                  print
+                  print "    include /etc/nginx/snippets/rescova-platform.conf;"
+                  next
+                }
+                { print }
+              ' "$nginx_config" > "$patched"
+              cat "$patched" > "$nginx_config"
+              rm -f "$patched"
+
+              if ! grep -qF "$include_line" "$nginx_config" || ! nginx -t; then
+                cp -- "$backup" "$nginx_config"
+                rm -f "$backup"
+                nginx -t
+                exit 1
+              fi
+
+              rm -f "$backup"
+            fi
+
+            nginx -t
+            systemctl reload nginx
+            curl --fail --silent --show-error --max-time 10 --head \
+              https://app.rescova.de/ >/dev/null
+          REMOTE

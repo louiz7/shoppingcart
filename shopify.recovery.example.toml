@@ -1,0 +1,20 @@
+# Review-only template. Do not deploy over the shared Rescova app.
+# Operational webhooks are registered per shop by the recovery OAuth flow.
+# Replace only in an isolated pilot app/config after approval.
+client_id = "REPLACE_WITH_EXISTING_APP_ID"
+name = "Rescova Cart Recovery Pilot"
+application_url = "https://PILOT_DASHBOARD_HOST/recovery"
+embedded = false
+
+[access_scopes]
+scopes = "read_orders,read_products,read_customers,write_discounts"
+
+[auth]
+redirect_urls = ["http://localhost:5173/admin/integrations/shopify/callback"]
+
+[webhooks]
+api_version = "2026-10"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "https://PILOT_API_HOST/webhooks/recovery/shopify/privacy"

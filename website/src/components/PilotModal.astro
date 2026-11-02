@@ -1,0 +1,519 @@
+---
+
+---
+
+<dialog class="pilot" id="pilot-modal" aria-labelledby="pilot-title">
+  <div class="pilot__card">
+    <button type="button" class="pilot__close" data-pilot-close aria-label="Schließen">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M4 4 16 16M16 4 4 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      </svg>
+    </button>
+
+    <div class="pilot__body">
+      <div class="pilot__left">
+        <div class="pilot__intro">
+          <h2 class="pilot__title" id="pilot-title">
+            Finden wir heraus, ob Evi <br />zu Ihren Workflows passt
+          </h2>
+          <p class="pilot__sub">
+            Wir rufen Sie zurück und schauen gemeinsam, welcher Workflow sich mit Evi sinnvoll pilotieren lässt.
+          </p>
+        </div>
+
+        <form class="pilot__form" id="pilot-form" novalidate>
+          <div class="pilot__grid">
+            <label class="pilot__field">
+              <span class="pilot__label">Vorname</span>
+              <input class="pilot__input" type="text" name="firstName" placeholder="Max" autocomplete="given-name" required />
+            </label>
+            <label class="pilot__field">
+              <span class="pilot__label">Nachname</span>
+              <input class="pilot__input" type="text" name="lastName" placeholder="Mustermann" autocomplete="family-name" required />
+            </label>
+            <label class="pilot__field">
+              <span class="pilot__label">Unternehmen</span>
+              <input class="pilot__input" type="text" name="company" placeholder="Firma GmbH" autocomplete="organization" required />
+            </label>
+            <label class="pilot__field">
+              <span class="pilot__label">Telefonnummer</span>
+              <input class="pilot__input" type="tel" name="phone" placeholder="+49 123456789" autocomplete="tel" inputmode="tel" required />
+            </label>
+          </div>
+
+          <button type="submit" class="btn btn--dark pilot__submit">
+            <span class="btn__top">Jetzt Pilot besprechen</span>
+          </button>
+
+          <p class="pilot__consent">
+            Mit dem Absenden bitten Sie Rescova, Sie zu Ihrer Pilot-Anfrage
+            telefonisch zu kontaktieren. Hinweise zur Verarbeitung Ihrer Angaben
+            über unsere Hosting-Infrastruktur finden Sie in unserer
+            <a href="/datenschutz#pilot-anfrage">Datenschutzerklärung</a>.
+          </p>
+
+          <p class="pilot__status" id="pilot-status" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+
+      <aside class="pilot__aside" aria-hidden="true">
+        <div class="pilot__steps">
+          <p class="pilot__steps-title">So läuft ein Pilot</p>
+          <ol class="pilot__step-list">
+            <li class="pilot__step">
+              <span class="pilot__step-num">1</span>
+              <div>
+                <p class="pilot__step-title">Ein klar begrenzter Einstieg</p>
+                <p class="pilot__step-text">
+                  Ein Portfolio, ein Gesprächsgrund und klar definierte Agentenaktionen.
+                </p>
+              </div>
+            </li>
+            <li class="pilot__step">
+              <span class="pilot__step-num">2</span>
+              <div>
+                <p class="pilot__step-title">Ihre Regeln bleiben maßgeblich</p>
+                <p class="pilot__step-text">
+                  Kontaktzeiten, Gesprächsleitfäden, Zahlungsoptionen und Eskalationen
+                  werden gemeinsam festgelegt.
+                </p>
+              </div>
+            </li>
+            <li class="pilot__step">
+              <span class="pilot__step-num">3</span>
+              <div>
+                <p class="pilot__step-title">Messbare Ergebnisse</p>
+                <p class="pilot__step-text">
+                  Wir definieren vor dem Start, was ein erfolgreicher Pilot bedeutet —
+                  etwa Erreichbarkeit, Zahlungszusagen, Klärungsquote und Qualität.
+                </p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </aside>
+    </div>
+  </div>
+</dialog>
+
+<script>
+  const modal = document.getElementById('pilot-modal') as HTMLDialogElement | null;
+
+  if (modal) {
+    const form = document.getElementById('pilot-form') as HTMLFormElement | null;
+    const status = document.getElementById('pilot-status');
+    const defaultStatusClass = 'pilot__status';
+
+    const open = () => {
+      if (modal.open) return;
+      modal.showModal();
+      document.body.style.overflow = 'hidden';
+      // Focus the first field for keyboard users.
+      modal.querySelector<HTMLInputElement>('.pilot__input')?.focus();
+    };
+
+    const close = () => modal.close();
+
+    // Any element flagged with data-pilot-open triggers the modal.
+    document.querySelectorAll<HTMLElement>('[data-pilot-open]').forEach((trigger) => {
+      trigger.addEventListener('click', (event) => {
+        event.preventDefault();
+        open();
+      });
+    });
+
+    // Close on backdrop / surrounding-padding click (target is the dialog itself),
+    // on the close button, and — natively — on Escape.
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) close();
+    });
+    modal.querySelectorAll('[data-pilot-close]').forEach((btn) => btn.addEventListener('click', close));
+
+    modal.addEventListener('close', () => {
+      document.body.style.overflow = '';
+      form?.reset();
+      if (status) {
+        status.textContent = '';
+        status.className = defaultStatusClass;
+      }
+    });
+
+    const API_BASE_URL = import.meta.env.PUBLIC_API_BASE_URL || '';
+    const submitBtn = form?.querySelector<HTMLButtonElement>('.pilot__submit') ?? null;
+
+    const setStatus = (text: string, variant: '' | 'err' | 'ok' = '') => {
+      if (!status) return;
+      status.textContent = text;
+      status.className = defaultStatusClass + (variant ? ` pilot__status--${variant}` : '');
+    };
+
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+
+      const data = Object.fromEntries(new FormData(form).entries());
+
+      if (submitBtn) submitBtn.disabled = true;
+      setStatus('Wird gesendet …');
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/v1/pilot-lead`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            firstName: data.firstName,
+            lastName: data.lastName,
+            company: data.company,
+            phone: data.phone,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.message || body.error || `HTTP ${res.status}`);
+
+        setStatus('Danke! Wir melden uns in Kürze bei Ihnen.', 'ok');
+        setTimeout(close, 2500);
+      } catch (err) {
+        setStatus(`Fehler: ${(err as Error).message}. Bitte später erneut versuchen.`, 'err');
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    });
+  }
+</script>
+
+<style>
+  /* Native <dialog> so we get top-layer stacking, focus trapping and Escape
+     handling for free. It fills the viewport and centres the card, so clicks
+     in the surrounding area (target === dialog) close it. */
+  .pilot {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    margin: 0;
+    padding: 24px;
+    border: none;
+    background: transparent;
+    overflow: auto;
+  }
+
+  .pilot[open] {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .pilot::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
+  }
+
+  .pilot__card {
+    position: relative;
+    width: 1120px;
+    max-width: 100%;
+    max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+    padding: 64px;
+    border-radius: 30px;
+    background: var(--color-white);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.24);
+    animation: pilot-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes pilot-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.98);
+    }
+  }
+
+  .pilot__close {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: #9aa0a6;
+    cursor: pointer;
+    transition:
+      background-color 0.2s ease,
+      color 0.2s ease;
+  }
+
+  .pilot__close:hover {
+    background: #f2f3f5;
+    color: var(--color-black);
+  }
+
+  .pilot__body {
+    display: flex;
+    align-items: stretch;
+    gap: 56px;
+  }
+
+  .pilot__left {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    width: 520px;
+    max-width: 100%;
+  }
+
+  .pilot__intro {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .pilot__title {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    font-size: 30px;
+    line-height: 1.3;
+    color: var(--color-black);
+  }
+
+  .pilot__sub {
+    font-weight: 500;
+    font-size: 18px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  .pilot__form {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .pilot__consent a {
+    color: inherit;
+    text-underline-offset: 2px;
+  }
+
+  .pilot__consent a:hover {
+    color: var(--color-button-primary);
+  }
+
+  .pilot__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  .pilot__field {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pilot__label {
+    font-family: var(--font-heading);
+    font-weight: 500;
+    font-size: 15px;
+    line-height: 1.2;
+    color: var(--color-black);
+  }
+
+  .pilot__input {
+    height: 42px;
+    padding: 0 16px;
+    border: 1px solid #d7dee6;
+    border-radius: 12px;
+    background: var(--color-white);
+    font-family: var(--font-body);
+    font-weight: 500;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--color-black);
+  }
+
+  .pilot__input::placeholder {
+    color: #9a9a9a;
+  }
+
+  .pilot__input:focus {
+    outline: none;
+    border-color: var(--color-button-primary);
+    box-shadow: 0 0 0 4px rgba(255, 76, 0, 0.18);
+  }
+
+  .pilot__submit {
+    display: block;
+    width: 100%;
+  }
+
+  .pilot__submit :global(.btn__top) {
+    height: 44px;
+  }
+
+  .pilot__consent {
+    margin-top: -20px;
+    font-weight: 500;
+    font-size: 10px;
+    line-height: 1.45;
+    text-align: center;
+    color: var(--color-text-muted);
+  }
+
+  .pilot__status {
+    min-height: 1em;
+    margin-top: -16px;
+    font-weight: 500;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+  }
+
+  .pilot__status--ok {
+    color: #1a7a4c;
+  }
+
+  .pilot__status--err {
+    color: #c0392b;
+  }
+
+  /* Orange showcase panel with the "So läuft ein Pilot" card floating inside. */
+  .pilot__aside {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 480px;
+    padding: 40px;
+    border-radius: 24px;
+    background: #ff7306;
+  }
+
+  .pilot__steps {
+    width: 100%;
+    padding: 28px;
+    border-radius: 16px;
+    background: var(--color-white);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  }
+
+  .pilot__steps-title {
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ededed;
+    font-family: var(--font-heading);
+    font-weight: 500;
+    font-size: 16px;
+    color: var(--color-black);
+  }
+
+  .pilot__step-list {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .pilot__step {
+    display: flex;
+    gap: 14px;
+  }
+
+  .pilot__step-num {
+    flex-shrink: 0;
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--color-button-primary);
+  }
+
+  .pilot__step-title {
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--color-black);
+  }
+
+  .pilot__step-text {
+    margin-top: 4px;
+    font-weight: 500;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--color-text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pilot__card {
+      animation: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .pilot__card {
+      width: 560px;
+      padding: 48px;
+    }
+
+    .pilot__body {
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .pilot__left,
+    .pilot__aside {
+      width: 100%;
+    }
+  }
+
+  @media (max-width: 599px) {
+    .pilot {
+      padding: 12px;
+    }
+
+    .pilot__card {
+      max-height: calc(100vh - 24px);
+      max-height: calc(100dvh - 24px);
+      padding: 48px 20px 28px;
+      border-radius: 20px;
+    }
+
+    .pilot__close {
+      top: 16px;
+      right: 16px;
+    }
+
+    .pilot__title {
+      font-size: 26px;
+    }
+
+    .pilot__title br,
+    .pilot__sub br {
+      display: none;
+    }
+
+    .pilot__sub {
+      font-size: 16px;
+    }
+
+    .pilot__grid {
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    .pilot__aside {
+      padding: 16px;
+      border-radius: 20px;
+    }
+
+    .pilot__steps {
+      padding: 20px;
+    }
+  }
+</style>

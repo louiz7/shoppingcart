@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Rescova — Usage Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        :root { color-scheme: light dark; }
+        body { font-family: -apple-system, system-ui, sans-serif; max-width: 960px;
+               margin: 2rem auto; padding: 0 1rem; }
+        h1 { margin-bottom: 0; }
+        .muted { color: #888; font-size: 0.9rem; }
+        form { margin: 1rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        input { padding: 0.5rem; font: inherit; flex: 1; min-width: 240px; }
+        button { padding: 0.5rem 1rem; font: inherit; cursor: pointer; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+                 gap: 1rem; margin: 1rem 0; }
+        .card { padding: 1rem; border: 1px solid #8884; border-radius: 8px; }
+        .card .v { font-size: 1.6rem; font-weight: 600; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+        th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8883; }
+        th { font-weight: 600; }
+        .err { color: #c33; }
+        code { background: #8881; padding: 0 0.25rem; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Rescova</h1>
+    <p class="muted">Reseller proxy for Deepslate voice AI. Enter your API key to see usage.</p>
+
+    <form id="f">
+        <input id="key" type="password" placeholder="dlh_..." autocomplete="off" required />
+        <button type="submit">Load usage</button>
+    </form>
+
+    <div id="err" class="err"></div>
+    <div id="out" hidden>
+        <h2 id="who"></h2>
+        <div class="cards">
+            <div class="card"><div class="muted">Calls</div><div class="v" id="calls">–</div></div>
+            <div class="card"><div class="muted">Voice minutes</div><div class="v" id="mins">–</div></div>
+            <div class="card"><div class="muted">Cost (USD)</div><div class="v" id="cost">–</div></div>
+            <div class="card"><div class="muted">Errors</div><div class="v" id="errs">–</div></div>
+        </div>
+
+        <h3>Recent requests</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th><th>Method</th><th>Path</th>
+                    <th>Status</th><th>Duration</th><th>Voice s</th><th>Cost</th>
+                </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+        </table>
+    </div>
+
+    <script>
+        const f = document.getElementById('f');
+        const errEl = document.getElementById('err');
+        const out = document.getElementById('out');
+
+        f.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errEl.textContent = '';
+            const key = document.getElementById('key').value.trim();
+            try {
+                const r = await fetch('/dashboard/usage', {
+                    headers: { Authorization: 'Bearer ' + key },
+                });
+                if (!r.ok) {
+                    const j = await r.json().catch(() => ({}));
+                    throw new Error(j.error || ('http ' + r.status));
+                }
+                render(await r.json());
+            } catch (err) {
+                errEl.textContent = 'Error: ' + err.message;
+                out.hidden = true;
+            }
+        });
+
+        function render(data) {
+            out.hidden = false;
+            document.getElementById('who').textContent =
+                data.customer.name + ' (' + data.customer.email + ')';
+
+            const s = data.summary;
+            document.getElementById('calls').textContent = s.total_calls;
+            document.getElementById('mins').textContent = (s.total_seconds / 60).toFixed(2);
+            document.getElementById('cost').textContent = '$' + Number(s.total_cost_usd).toFixed(4);
+            document.getElementById('errs').textContent = s.error_count;
+
+            const tbody = document.getElementById('rows');
+            tbody.innerHTML = '';
+            for (const row of data.recent) {
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + new Date(row.created_at).toLocaleString() + '</td>' +
+                    '<td>' + row.method + '</td>' +
+                    '<td><code>' + row.path + '</code></td>' +
+                    '<td>' + (row.upstream_status ?? '-') + '</td>' +
+                    '<td>' + row.duration_ms + ' ms</td>' +
+                    '<td>' + Number(row.voice_seconds).toFixed(2) + '</td>' +
+                    '<td>$' + Number(row.cost_usd).toFixed(4) + '</td>';
+                tbody.appendChild(tr);
+            }
+        }
+    </script>
+</body>
+</html>

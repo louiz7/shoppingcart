@@ -1,0 +1,114 @@
+---
+
+---
+
+<footer class="footer">
+  <div class="footer__inner">
+    <div class="footer__cell footer__cell--logo">
+      <img src="/assets/footer-logo.svg" alt="Rescova" width="99" height="94" />
+    </div>
+    <nav class="footer__links" aria-label="Footer">
+      <a class="footer__link" href="mailto:robert@rescova.de">Email</a>
+      <a
+        class="footer__link"
+        href="https://www.linkedin.com/company/rescova/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >LinkedIn</a>
+      <a class="footer__link" href="/impressum">Impressum</a>
+      <a class="footer__link" href="/datenschutz">Datenschutz</a>
+    </nav>
+  </div>
+  <p class="footer__address">
+    Rescova UG (haftungsbeschränkt) i. G., Donaustraße 44, 12043 Berlin
+  </p>
+</footer>
+
+<style>
+  .footer {
+    border-top: 1px solid #e1e1e1;
+    background: var(--color-page-bg);
+  }
+
+  .footer__inner {
+    display: flex;
+    align-items: stretch;
+    max-width: var(--container-width);
+    margin-inline: auto;
+  }
+
+  .footer__cell--logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 183px;
+    border-inline: 1px solid #e1e1e1;
+  }
+
+  .footer__cell--logo img {
+    width: 99px;
+    height: 94px;
+  }
+
+  .footer__links {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    border-right: 1px solid #e1e1e1;
+  }
+
+  .footer__link {
+    padding: 8px 40px;
+    font-weight: 500;
+    font-size: 18px;
+    line-height: 1.5;
+    text-decoration: none;
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  .footer__link:not(:last-child) {
+    border-bottom: 1px solid #e1e1e1;
+  }
+
+  .footer__link:hover {
+    color: var(--color-button-primary);
+  }
+
+  .footer__address {
+    padding: 8px 40px;
+    border-top: 1px solid #e1e1e1;
+    font-weight: 300;
+    font-style: italic;
+    font-size: 14px;
+    line-height: 1.3;
+    text-align: center;
+    color: rgba(0, 0, 0, 0.3);
+  }
+
+  @media (max-width: 599px) {
+    .footer__inner {
+      flex-direction: column;
+    }
+
+    .footer__cell--logo {
+      flex-basis: auto;
+      padding: 32px;
+      border-inline: 0;
+      border-bottom: 1px solid #e1e1e1;
+    }
+
+    .footer__links {
+      border-right: 0;
+    }
+
+    .footer__link {
+      padding-inline: 24px;
+    }
+
+    .footer__address {
+      padding-inline: 24px;
+      white-space: normal;
+    }
+  }
+</style>

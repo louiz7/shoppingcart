@@ -1,0 +1,61 @@
+name: Daily devlog
+
+on:
+  schedule:
+    # Summarise the completed Berlin calendar day. Scheduled workflows can
+    # start late, so never depend on the job still running before midnight.
+    - cron: "15 0 * * *"
+      timezone: "Europe/Berlin"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Berlin date to regenerate (YYYY-MM-DD); defaults to yesterday"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-devlog
+  cancel-in-progress: false
+
+jobs:
+  generate-devlog:
+    if: github.repository == 'louiz7/rescova'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Generate completed day's devlog
+        env:
+          TZ: Europe/Berlin
+          DEVLOG_DATE: ${{ inputs.date }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-nano' }}
+        run: node scripts/generate-daily-devlog.mjs
+
+      - name: Commit and push devlog
+        env:
+          TZ: Europe/Berlin
+        run: |
+          DEVLOG_DATE="${DEVLOG_DATE:?generate step did not set DEVLOG_DATE}"
+          DEVLOG_FILE="devlog/${DEVLOG_DATE}.md"
+
+          git add -- "$DEVLOG_FILE"
+          if git diff --cached --quiet; then
+            echo "Devlog is already up to date."
+            exit 0
+          fi
+
+          git config user.name "rescova-devlog[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "[bot] devlog ${DEVLOG_DATE}"
+          git push origin HEAD:main

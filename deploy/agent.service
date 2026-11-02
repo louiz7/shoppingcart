@@ -1,0 +1,19 @@
+[Unit]
+Description=Rescova Evi LiveKit Agent
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/deliahapi/agent
+EnvironmentFile=/opt/deliahapi/agent/.env
+ExecStart=/opt/deliahapi/agent/.venv/bin/python agent.py start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=deliahapi-agent
+
+[Install]
+WantedBy=multi-user.target
