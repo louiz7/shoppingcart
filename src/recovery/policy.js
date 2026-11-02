@@ -85,7 +85,9 @@ function eligibility({ shop, checkout, contact, attempts = [], active = false },
         if (ownerTest!==true && !inWindow(p, contact.timezone, now)) return 'outside_call_window';
         if (active) return 'contact_busy';
         if (attempts.length >= p.maxAttempts) return 'attempt_limit';
-        if (attempts.some((a) => new Date(a.created_at) > new Date(now - p.cooldownHours * 3600000))) return 'contact_cooldown';
+        // Explicitly authorized owner retests may follow a prior owner test; customer cooldowns still apply.
+        if (attempts.some((a) => !(ownerTest===true && a.is_test===true) &&
+            new Date(a.created_at) > new Date(now - p.cooldownHours * 3600000))) return 'contact_cooldown';
     }
     return null;
 }

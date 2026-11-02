@@ -27,7 +27,7 @@ async function state(executor, shop, checkoutId, lock = false) {
     if (!checkout) throw policy.problem('checkout_not_found', 404);
     const { rows: contacts } = await executor.query(`SELECT * FROM recovery_contacts WHERE shop_id=$1 AND contact_key=$2
         ${lock ? 'FOR UPDATE' : ''}`, [shop.id, checkout.contact_key]);
-    const { rows: attempts } = await executor.query(`SELECT id,status,created_at FROM recovery_calls
+    const { rows: attempts } = await executor.query(`SELECT id,status,created_at,is_test FROM recovery_calls
         WHERE shop_id=$1 AND contact_key=$2 ORDER BY created_at DESC`, [shop.id, checkout.contact_key]);
     return { shop, checkout, contact: contacts[0], attempts,
         active: attempts.some((a) => ['reserved', 'dialing', 'connected', 'unknown'].includes(a.status)) };

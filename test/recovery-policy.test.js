@@ -85,13 +85,18 @@ test('call windows honor contact timezone and daylight saving time', () => {
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-01T12:00:00Z')), false);
 });
 
-test('trusted owner tests bypass only abandonment delay and call window', () => {
+test('trusted owner tests bypass timing gates but preserve customer cooldowns and attempt limits', () => {
     const fresh=context(); fresh.checkout.source_updated_at=NOW;
     assert.equal(p.eligibility(fresh,NOW),'abandonment_delay');
     assert.equal(p.eligibility(fresh,NOW,'call',true),null);
     const late=new Date('2026-11-02T22:00:00Z');
     assert.equal(p.eligibility(context(),late),'outside_call_window');
     assert.equal(p.eligibility(context(),late,'call',true),null);
+    const retry=context();retry.attempts=[{created_at:NOW,is_test:true}];
+    assert.equal(p.eligibility(retry,NOW,'call',true),null);
+    assert.equal(p.eligibility(retry,NOW,'call'), 'contact_cooldown');
+    retry.attempts.push({created_at:NOW,is_test:true});
+    assert.equal(p.eligibility(retry,NOW,'call',true),'attempt_limit');
     for (const [error,change] of [
         ['consent_missing',(c)=>{c.contact.evidence=null;}],['already_purchased',(c)=>{c.checkout.completed_at=NOW;}],
         ['contact_stopped',(c)=>{c.contact.stopped_at=NOW;}],['checkout_expired',(c)=>{c.checkout.source_updated_at='2026-10-01';}],

@@ -163,6 +163,12 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             assert.deepEqual((await db.query('SELECT arm,enrolled_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0],{arm:null,enrolled_at:null});
             assert.equal((await db.query('SELECT arm FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].arm,null);
             assert.equal((await s.getContext({...call,customer_id:f.customerId})).identityRequired,true);
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/contact_busy/);
+            await s.endCall({...call,customer_id:f.customerId});
+            const retry=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
+            assert.equal(dial.mock.calls.length,before+2);
+            await s.endCall({...((await db.query('SELECT * FROM recovery_calls WHERE id=$1',[retry.id])).rows[0]),customer_id:f.customerId});
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/attempt_limit/);
             await db.query('UPDATE recovery_calls SET connected_at=NOW() WHERE id=$1',[call.id]);
             await hooks.ingestShopify(await s.shopFor(f.customerId,f.shopId),'orders/paid',{
                 id:'owner-test-order',checkout_token:'checkout-token-123',checkout_id:123,currency:'EUR',financial_status:'paid',current_subtotal_price:'118.00',
