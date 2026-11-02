@@ -24,6 +24,13 @@ CASES = [
     ('quality_known_gap', False, [('user', 'Hält das garantiert zehn Jahre?')], 'no_tools', None),
     ('quality_empty_description', False, [('user', 'Ist die Qualität gut?')], 'no_tools', None),
     ('quality_after_confirm', False, [('user', 'Wie sieht es mit der Verarbeitung aus?')], 'no_tools', None),
+    ('objection_material_de', False, [('user', 'Aus welchem Material ist das genau?')], 'no_tools', None),
+    ('objection_material_en', False, [('user', 'What exactly is the fabric made of?')], 'no_tools', None),
+    ('objection_repeat', False, [('assistant', 'Das genaue Material kann ich dir gerade nicht sagen, aber ich kann dir versichern, dass wir extrem auf die Qualität unserer Produkte achten.'),
+        ('user', 'Okay, aber wie sind die Nähte verarbeitet?')], 'no_tools', None),
+    ('objection_material_required', False, [('user', 'Ich habe eine Wollallergie. Ohne genaue Zusammensetzung kaufe ich das nicht. Ist es garantiert wollfrei?')], 'no_tools', None),
+    ('objection_timing', False, [('user', 'Ich bin noch interessiert, will aber in Ruhe darüber nachdenken. Bitte noch keine SMS.')], None, None),
+    ('objection_competitor', False, [('user', 'Ein anderer Shop hat ein ähnliches Shirt günstiger. Warum sollte ich bei euch kaufen?')], None, None),
     ('de_sms_natural', False, [('assistant', 'Soll ich dir den Link per SMS schicken?'), ('user', 'Das wäre super.')], 'send_checkout_link', False),
     ('en_sms_natural', False, [('assistant', 'Would you like the checkout link by text?'), ('user', 'Please do.')], 'send_checkout_link', False),
     ('ready_buyer', False, [('user', 'Ich brauche keine Beratung, schick mir einfach den Checkout per SMS.')], 'send_checkout_link', False),
@@ -63,9 +70,10 @@ async def main():
         async def check(case):
             name, prepared, dialog, expected, discount = case
             fixture = context
-            if name in ('quality_empty_description', 'quality_after_confirm'):
+            if name in ('quality_empty_description', 'quality_after_confirm', 'objection_material_de',
+                        'objection_material_en', 'objection_repeat', 'objection_material_required'):
                 fixture = {**context, 'cart': {**context['cart'], 'items': [
-                    {**context['cart']['items'][0], 'description': ''}]}}
+                    {**context['cart']['items'][0], 'title': 'Synthetic shirt', 'description': ''}]}}
             history = [{'type':'function_call','call_id':'fixture_context',
                         'name':'confirm_contact' if name == 'quality_after_confirm' else 'get_cart_context','arguments':'{}'},
                        {'type':'function_call_output','call_id':'fixture_context','output':json.dumps(fixture)}]
@@ -92,7 +100,7 @@ async def main():
             else:
                 passed = not stops_contact and not any(item.name in ('send_checkout_link','end_call') for item in calls)
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, **({'reply': result.output_text} if name.startswith('quality_') else {})}),flush=True)
+                'ms':elapsed, **({'reply': result.output_text} if name.startswith(('quality_', 'objection_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in CASES))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
