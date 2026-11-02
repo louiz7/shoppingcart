@@ -119,8 +119,12 @@ function cartHash(snapshot) {
 
 function conversationPermission(text, prompt) {
     const answer = String(text || '').toLowerCase().replace(/\u2019/g,"'");
-    return /(?:\bpasst (?:es|das) (?:gerade|kurz)\b|\bis (?:now|this) (?:a )?good time\b)/i.test(String(prompt)) &&
-        /^\s*(ja|yes|sure|okay|ok|klar|gerne|natürlich|of course|go ahead|passt|es passt|das passt)\b/i.test(answer) &&
+    const timing = /(?:\bpasst (?:es|das) (?:gerade|kurz)\b|\bis (?:now|this) (?:a )?good time\b)/i.test(String(prompt));
+    const help = /(?:\bfrage\b.*\bprodukten\b.*\bhelfen\b|\bproduct question\b.*\bhelp\b)/i.test(String(prompt));
+    const affirmative = /^\s*(ja|yes|sure|okay|ok|klar|gerne|natürlich|of course|go ahead|passt|es passt|das passt)\b/i.test(answer);
+    const productQuestion = /^\s*(was|wie|wann|wo|welch\w*|kann|könn\w*|ist|sind|hat|haben|gibt|kostet|what|how|when|where|which|can|could|is|are|does|do)\b/i.test(answer) &&
+        /\b(produkt\w*|artikel|größe\w*|groesse\w*|preis\w*|kostet|rabatt\w*|versand\w*|liefer\w*|material\w*|farbe\w*|passform|retour\w*|rückgabe|hoodie|shirt|product\w*|item\w*|size\w*|price\w*|cost\w*|shipping|delivery|return\w*|discount\w*|fit|colou?r\w*|available|stock|waterproof)\b|wie fällt .*aus|how much/i.test(answer);
+    return (timing || help) && (affirmative || (help && productQuestion)) &&
         !/\b(nein|nicht|kein|keine|falsch|später|mailbox|no|not|never|wrong|later|busy|voicemail|don'?t|can'?t)\b/i.test(answer) && !stopSignal(answer);
 }
 

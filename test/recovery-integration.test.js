@@ -255,8 +255,10 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
     await t.test('product information stays hidden until conversation permission is grounded in transcripts', async () => {
         const f = await fixture(); await activate(f); const call = { ...await fakeCall(f), identity_verified: false };
         await db.query('UPDATE recovery_calls SET identity_verified=FALSE WHERE id=$1',[call.id]);
+        await db.query(`UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{supportEmail}','"support@example.invalid"') WHERE id=$1`,[f.checkoutId]);
         const initial = await s.getContext(call);
         assert.equal(initial.cart, undefined); assert.equal(initial.contactConfirmed, false);
+        assert.equal(initial.supportEmail,undefined);
         await assert.rejects(s.getOffer(call, 10), /contact_confirmation_required/);
         await assert.rejects(s.confirmContact(call), /contact_confirmation_required/);
         await s.recordTranscript(call, { role: 'assistant',eventId: randomUUID(),text: 'Passt es gerade kurz?' });
@@ -267,6 +269,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         await s.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Ja, genau.' });
         assert.equal((await s.confirmContact(call)).contactConfirmed, true);
         assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,true);
+        assert.equal((await s.getContext({ ...call,identity_verified:true })).supportEmail,'support@example.invalid');
     });
 
     await t.test('offers are single-use intents and stale carts invalidate the existing quote', async () => {

@@ -281,6 +281,7 @@ async function getContext(call) {
     const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
     return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop), contactConfirmed: true,
+        supportEmail: ctx.checkout.snapshot.supportEmail || null,
         cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
             shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
         maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,

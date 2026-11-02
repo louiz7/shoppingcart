@@ -260,11 +260,13 @@ async function refreshCheckout(shop, externalId) {
     if (typeof externalId !== 'string' || !/^gid:\/\/shopify\/AbandonedCheckout\/\d+$/.test(externalId)) throw problem('checkout_unverified', 409);
     const data = await graphql(shop, `query RecoveryCheckout($id:ID!) {
         node(id:$id) { ... on AbandonedCheckout { ${FIELDS} } }
-        shop { currencyCode }
+        shop { currencyCode contactEmail }
     }`, { id: externalId });
     if (!data.node || data.node.id !== externalId) throw problem('checkout_unverified', 409);
     if (!['EUR','USD'].includes(data.shop.currencyCode) || data.shop.currencyCode !== (shop.currency || 'EUR')) throw problem('unsupported_shop_currency', 409);
-    return normalizeCheckout(data.node, shop);
+    const email = typeof data.shop.contactEmail === 'string' ? data.shop.contactEmail.trim() : '';
+    const supportEmail = email.length <= 254 && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email) ? email : null;
+    return { ...normalizeCheckout(data.node, shop), supportEmail };
 }
 
 async function createDiscount(shop, snapshot, code, percent, endsAt) {

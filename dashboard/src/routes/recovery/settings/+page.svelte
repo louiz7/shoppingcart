@@ -16,8 +16,8 @@
 	let agentSubmitting = $state(false);
 	let agentTransportError = $state('');
 	const greeting = $derived(agentLanguage === 'en'
-		? `Hi, I'm ${agentName.trim() || '…'}, the AI assistant ${agentPersona === 'founder' ? 'calling on behalf of the founding team at' : 'for'} ${shop?.brand || '…'}. Is now a good time?`
-		: `Hallo, hier ist ${agentName.trim() || '…'}, die KI-Assistenz ${agentPersona === 'founder' ? 'im Auftrag des Gründungsteams von' : 'von'} ${shop?.brand || '…'}. Passt es gerade kurz?`);
+		? `Hi, I'm ${agentName.trim() || '…'}, the AI assistant ${agentPersona === 'founder' ? 'from the founding team at' : 'for'} ${shop?.brand || '…'}. You had something in your cart with us. Is there a product question I can help with?`
+		: `Hey, hier ist ${agentName.trim() || '…'}, die KI-Assistenz ${agentPersona === 'founder' ? 'vom Gründerteam von' : 'von'} ${shop?.brand || '…'}. Du hattest etwas bei uns im Warenkorb. Ist noch eine Frage zu den Produkten offen, bei der ich helfen kann?`);
 	let requestId = $state(untrack(() => form?.values?.requestId || data.requestId));
 	let title = $state(untrack(() => form?.values?.title || ''));
 	let code = $state(untrack(() => form?.values?.code || ''));

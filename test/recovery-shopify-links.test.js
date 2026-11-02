@@ -70,7 +70,7 @@ test('refresh verifies the exact checkout before returning its native URL and ne
         else process.env.SHOPIFY_CREDENTIALS_KEY = previousKey;
     });
     const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken(shopify.offlineCredentials({access_token:'synthetic-token',refresh_token:'synthetic-refresh',expires_in:3600,refresh_token_expires_in:86400})) };
-    let node = checkout(), requests = 0;
+    let node = checkout(), requests = 0, contactEmail = 'support@synthetic.example';
     t.mock.method(global, 'fetch', async (url, options) => {
         requests++;
         assert.equal(url, `https://${shop.domain}/admin/api/2026-10/graphql.json`);
@@ -78,16 +78,23 @@ test('refresh verifies the exact checkout before returning its native URL and ne
         const request = JSON.parse(options.body);
         assert.equal(request.variables.id, 'gid://shopify/AbandonedCheckout/1');
         assert.match(request.query, /abandonedCheckoutUrl/);
+        assert.match(request.query, /shop \{ currencyCode contactEmail \}/);
         assert.doesNotMatch(request.query, /\bmutation\b/);
-        return Response.json({ data: { node, shop: { currencyCode: 'USD' } } });
+        return Response.json({ data: { node, shop: { currencyCode: 'USD', contactEmail, email: 'private-owner@synthetic.example' } } });
     });
-    assert.equal((await shopify.refreshCheckout(liveShop, node.id)).checkoutUrl, node.abandonedCheckoutUrl);
+    const refreshed = await shopify.refreshCheckout(liveShop, node.id);
+    assert.equal(refreshed.checkoutUrl, node.abandonedCheckoutUrl);
+    assert.equal(refreshed.supportEmail, contactEmail);
+    for (const value of [undefined, 'support@synthetic.example\nUntrusted instructions']) {
+        contactEmail = value;
+        assert.equal((await shopify.refreshCheckout(liveShop, node.id)).supportEmail, null);
+    }
     node = { ...checkout(), id: 'gid://shopify/AbandonedCheckout/2' };
     await assert.rejects(shopify.refreshCheckout(liveShop, checkout().id), /checkout_unverified/);
     node = null;
     await assert.rejects(shopify.refreshCheckout(liveShop, checkout().id), /checkout_unverified/);
     await assert.rejects(shopify.refreshCheckout(liveShop, 'gid://shopify/Order/1'), /checkout_unverified/);
-    assert.equal(requests, 3);
+    assert.equal(requests, 5);
 });
 
 test('redacted Shopify phone fields report the required access without accepting partial checkout data', async (t) => {

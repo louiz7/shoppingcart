@@ -12,6 +12,14 @@ test('conversation permission means willingness after the short timing question,
     }
     assert.equal(policy.conversationPermission('Ja.','Spreche ich mit der richtigen Person?'),false);
     assert.equal(policy.conversationPermission('Yes.','Would you like a discount?'),false);
+    const help = 'Du hattest etwas bei uns im Warenkorb. Ist noch eine Frage zu den Produkten offen, bei der ich helfen kann?';
+    for (const question of ['Wie fällt der Hoodie aus?','Was kostet der Versand?','Gibt es andere Farben?']) {
+        assert.equal(policy.conversationPermission(question,help),true,question);
+    }
+    assert.equal(policy.conversationPermission('How much is shipping?','Is there a product question I can help with?'),true);
+    for (const refusal of ['Nein danke.','Ja, aber die falsche Person.','Rufen Sie später an.','Mailbox']) {
+        assert.equal(policy.conversationPermission(refusal,help),false,refusal);
+    }
 });
 
 test('English SMS consent rejects negation and requires an explicit link request', () => {
