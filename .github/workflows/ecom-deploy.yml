@@ -1,0 +1,119 @@
+name: Ecom test and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecom-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'louiz7/shoppingcart' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: shoppingcart
+          POSTGRES_PASSWORD: ci-only-shoppingcart
+          POSTGRES_DB: shoppingcart
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U shoppingcart -d shoppingcart"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: postgres://shoppingcart:ci-only-shoppingcart@127.0.0.1:55433/shoppingcart
+      RECOVERY_DB_TEST: '1'
+      RECOVERY_ONLY: '1'
+      RECOVERY_LIVE_ENABLED: '0'
+      RECOVERY_SMS_ENABLED: '0'
+      RECOVERY_WORKER_ENABLED: '0'
+      SHOPIFY_CLIENT_SECRET: ci-only-not-a-real-shopify-secret
+      SHOPIFY_CREDENTIALS_KEY: '1111111111111111111111111111111111111111111111111111111111111111'
+      CAMPAIGN_SCHEDULER_ENABLED: '0'
+      EMAIL_WORKER_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            dashboard/package-lock.json
+            deploy/ecom/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: agent/requirements-recovery.txt
+      - name: Install test dependencies
+        run: |
+          npm ci
+          npm ci --prefix dashboard
+          python -m pip install -r agent/requirements-recovery.txt
+      - name: Migrate isolated CI database
+        run: node scripts/migrate.js
+      - name: Test Node services and tenant boundaries
+        run: npm test
+      - name: Test offline voice SDK contracts
+        run: python -m unittest discover -s agent -p 'test_recovery.py'
+      - name: Test restricted deployment receiver
+        run: python -m unittest discover -s test -p 'test_deployment_wrapper.py'
+      - name: Check and build dashboard
+        run: |
+          npm run check --prefix dashboard
+          npm run build --prefix dashboard
+      - name: Audit isolated API runtime
+        run: npm audit --prefix deploy/ecom --omit=dev --audit-level=high
+      - name: Package allowlisted Linux runtime
+        env:
+          ARTIFACT_PATH: ${{ runner.temp }}/ecom-release-${{ github.sha }}.tar.gz
+        run: node scripts/package-ecom-release.js "$ARTIFACT_PATH" "$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ecom-release-${{ github.sha }}
+          path: ${{ runner.temp }}/ecom-release-${{ github.sha }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: build
+    if: github.repository == 'louiz7/shoppingcart' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: ecom-production
+      url: https://ecom.rescova.de
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ecom-release-${{ github.sha }}
+          path: release
+      - name: Deploy through restricted SSH command
+        env:
+          ECOM_DEPLOY_SSH_KEY: ${{ secrets.ECOM_DEPLOY_SSH_KEY }}
+          ECOM_DEPLOY_KNOWN_HOSTS: ${{ secrets.ECOM_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf "$ssh_dir"' EXIT
+          test -n "$ECOM_DEPLOY_SSH_KEY"
+          test -n "$ECOM_DEPLOY_KNOWN_HOSTS"
+          printf '%s\n' "$ECOM_DEPLOY_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$ECOM_DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh -T -i "$ssh_dir/key" -o IdentitiesOnly=yes -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            rescova-ecom-deploy@178.105.55.189 < "release/ecom-release-${GITHUB_SHA}.tar.gz"

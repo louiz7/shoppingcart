@@ -85,6 +85,22 @@ test('call windows honor contact timezone and daylight saving time', () => {
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-01T12:00:00Z')), false);
 });
 
+test('trusted owner tests bypass only abandonment delay and call window', () => {
+    const fresh=context(); fresh.checkout.source_updated_at=NOW;
+    assert.equal(p.eligibility(fresh,NOW),'abandonment_delay');
+    assert.equal(p.eligibility(fresh,NOW,'call',true),null);
+    const late=new Date('2026-11-02T22:00:00Z');
+    assert.equal(p.eligibility(context(),late),'outside_call_window');
+    assert.equal(p.eligibility(context(),late,'call',true),null);
+    for (const [error,change] of [
+        ['consent_missing',(c)=>{c.contact.evidence=null;}],['already_purchased',(c)=>{c.checkout.completed_at=NOW;}],
+        ['contact_stopped',(c)=>{c.contact.stopped_at=NOW;}],['checkout_expired',(c)=>{c.checkout.source_updated_at='2026-10-01';}],
+        ['control_group',(c)=>{c.contact.arm='control';}],['contact_busy',(c)=>{c.active=true;}],
+        ['attempt_limit',(c)=>{c.attempts=[{created_at:NOW},{created_at:NOW}];}],
+        ['contact_cooldown',(c)=>{c.attempts=[{created_at:NOW}];}],
+    ]) {const c=context();change(c);assert.equal(p.eligibility(c,NOW,'call',true),error);}
+});
+
 test('integer money and discount ceilings cannot be changed by a model request', () => {
     assert.equal(p.cents('118.00'), 11800);
     assert.equal(p.cents('0.01'), 1);

@@ -64,6 +64,142 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         return r.rows[0].snapshot;
     });
 
+    await t.test('expired or deactivated calls can only close their own real room, never run more shop actions', async () => {
+        const f = await fixture(); await activate(f); const call = await fakeCall(f);
+        const token = 'b'.repeat(64);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1", [f.shopId]);
+        await db.query('UPDATE recovery_calls SET token_hash=$2 WHERE id=$1', [call.id, s.hash(token)]);
+        await db.query('UPDATE customers SET is_active=FALSE WHERE id=$1', [f.customerId]);
+        const before = hangup.mock.calls.length;
+        await hooks.reconcileStops(f.shopId);
+        assert.equal(hangup.mock.calls.length, before+1);
+        assert.equal(hangup.mock.calls.at(-1).arguments[0], `recovery-${call.id}`);
+        await db.query("UPDATE recovery_calls SET expires_at=NOW()-INTERVAL '1 minute',status='ended' WHERE id=$1", [call.id]);
+        const express = require('express');
+        const app = express(); app.use(express.json());
+        app.use('/internal/recovery/tools', require('../src/recovery/routes').toolsRouter);
+        const server = app.listen(0, '127.0.0.1');
+        await new Promise((resolve) => server.once('listening', resolve));
+        const priorSecret = process.env.INTERNAL_TOOL_SECRET;
+        process.env.INTERNAL_TOOL_SECRET = 'synthetic-cleanup-only-gateway-secret';
+        const send = (name, callToken = token, secret = process.env.INTERNAL_TOOL_SECRET) => originalFetch(
+            `http://127.0.0.1:${server.address().port}/internal/recovery/tools/${name}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'x-internal-secret': secret, 'x-call-token': callToken }, body: '{}',
+            });
+        try {
+            const ended = await send('end');
+            assert.equal(ended.status, 200); assert.deepEqual(await ended.json(), { ended: true });
+            assert.equal(hangup.mock.calls.at(-1).arguments[0], `recovery-${call.id}`);
+            for (const name of ['context','connected','confirm_identity','offer','send_link','order_status']) {
+                assert.equal((await send(name)).status, 401);
+            }
+            assert.equal((await send('end', 'c'.repeat(64))).status, 401);
+            assert.equal((await send('end', token, 'wrong-secret')).status, 401);
+            await db.query("UPDATE recovery_calls SET status='simulated' WHERE id=$1", [call.id]);
+            assert.equal((await send('end')).status, 401);
+        } finally {
+            await new Promise((resolve) => server.close(resolve));
+            if (priorSecret === undefined) delete process.env.INTERNAL_TOOL_SECRET; else process.env.INTERNAL_TOOL_SECRET = priorSecret;
+        }
+    });
+
+    await t.test('confirmed room cleanup releases the real call without inventing SIP costs',async () => {
+        const f=await fixture(); await activate(f); const call=await fakeCall(f);
+        await db.query(`UPDATE recovery_shops SET mode='live' WHERE id=$1`,[f.shopId]);
+        await db.query(`UPDATE recovery_checkouts SET status='calling' WHERE id=$1`,[f.checkoutId]);
+        const before=hangup.mock.calls.length;
+        assert.deepEqual(await s.endCall(call),{ended:true});
+        const ended=(await db.query('SELECT status,ended_at,cost_cents FROM recovery_calls WHERE id=$1',[call.id])).rows[0];
+        assert.equal(ended.status,'ended'); assert.ok(ended.ended_at); assert.equal(ended.cost_cents,null);
+        assert.equal((await db.query('SELECT status FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].status,'contacted');
+        assert.deepEqual(await s.endCall(call),{ended:true}); assert.equal(hangup.mock.calls.length,before+1);
+        assert.deepEqual((await db.query('SELECT status,ended_at,cost_cents FROM recovery_calls WHERE id=$1',[call.id])).rows[0],ended);
+    });
+
+    await t.test('failed cleanup stays unconfirmed and only an exact SDK missing-room response counts as absence',async () => {
+        const { TwirpError }=require('livekit-server-sdk');
+        const f=await fixture(); await activate(f); const call=await fakeCall(f);
+        await db.query(`UPDATE recovery_shops SET mode='live' WHERE id=$1`,[f.shopId]);
+        await db.query(`UPDATE recovery_checkouts SET status='calling' WHERE id=$1`,[f.checkoutId]);
+        const timeout=new Error('Synthetic provider timeout');
+        hangup.mock.mockImplementation(async()=>{throw timeout;});
+        try {
+            await assert.rejects(s.endCall(call),timeout);
+            assert.deepEqual((await db.query('SELECT status,ended_at,cost_cents FROM recovery_calls WHERE id=$1',[call.id])).rows[0],
+                {status:'dialing',ended_at:null,cost_cents:null});
+            assert.equal((await db.query('SELECT status FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].status,'calling');
+            hangup.mock.mockImplementation(async()=>{throw Object.assign(new Error('Untrusted generic not-found'),{status:404,code:'not_found'});});
+            await assert.rejects(s.endCall(call),/Untrusted generic/);
+            hangup.mock.mockImplementation(async()=>{throw new TwirpError('Not Found','Synthetic room absent',404,'not_found');});
+            assert.deepEqual(await s.endCall(call),{ended:true});
+            assert.equal((await db.query('SELECT status FROM recovery_calls WHERE id=$1',[call.id])).rows[0].status,'ended');
+        } finally {hangup.mock.mockImplementation(async()=>{});}
+    });
+
+    await t.test('manual owner tests require trusted process configuration and preserve ordinary policy and experiments',async () => {
+        const f=await fixture(); await activate(f);
+        const keys=['RECOVERY_OWNER_TEST_ENABLED','RECOVERY_OWNER_TEST_SHOP_ID','RECOVERY_OWNER_TEST_PHONE','RECOVERY_LIVE_ENABLED'];
+        const saved=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+        const before=dial.mock.calls.length,reads=shopify.refreshCheckout.mock.calls.length;
+        try {
+            process.env.RECOVERY_OWNER_TEST_ENABLED='0';
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/owner_test_not_authorized/);
+            assert.equal(shopify.refreshCheckout.mock.calls.length,reads);
+            process.env.RECOVERY_OWNER_TEST_ENABLED='1';process.env.RECOVERY_OWNER_TEST_SHOP_ID=randomUUID();
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/owner_test_not_authorized/);
+            assert.equal(shopify.refreshCheckout.mock.calls.length,reads);
+            process.env.RECOVERY_OWNER_TEST_SHOP_ID=f.shopId;process.env.RECOVERY_OWNER_TEST_PHONE='+4900000000009';process.env.RECOVERY_LIVE_ENABLED='1';
+            await db.query(`UPDATE recovery_shops SET mode='live',webhooks_ready=TRUE WHERE id=$1`,[f.shopId]);
+            await db.query(`UPDATE recovery_checkouts SET source_updated_at=NOW(),snapshot=jsonb_set(snapshot,'{updatedAt}',to_jsonb(NOW()::text)) WHERE id=$1`,[f.checkoutId]);
+            await db.query(`UPDATE recovery_contacts SET arm=NULL WHERE shop_id=$1`,[f.shopId]);
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/owner_test_not_authorized/);
+            assert.equal(dial.mock.calls.length,before);
+            process.env.RECOVERY_OWNER_TEST_PHONE=f.snapshot.phone;
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId),/abandonment_delay/);
+            const result=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
+            assert.equal(dial.mock.calls.length,before+1);
+            const call=(await db.query('SELECT * FROM recovery_calls WHERE id=$1',[result.id])).rows[0];
+            assert.equal(call.is_test,true);
+            assert.deepEqual((await db.query('SELECT arm,enrolled_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0],{arm:null,enrolled_at:null});
+            assert.equal((await db.query('SELECT arm FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].arm,null);
+            assert.equal((await s.getContext({...call,customer_id:f.customerId})).identityRequired,true);
+            await db.query('UPDATE recovery_calls SET connected_at=NOW() WHERE id=$1',[call.id]);
+            await hooks.ingestShopify(await s.shopFor(f.customerId,f.shopId),'orders/paid',{
+                id:'owner-test-order',checkout_token:'checkout-token-123',checkout_id:123,currency:'EUR',financial_status:'paid',current_subtotal_price:'118.00',
+                created_at:new Date(Date.now()+1000).toISOString(),updated_at:new Date(Date.now()+1000).toISOString(),
+            },randomUUID());
+            assert.equal((await s.dailySummary(f.customerId)).shops[0].confirmedCheckoutsToday,0);
+        } finally {
+            for(const [key,value] of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}
+            dial.mock.resetCalls();
+        }
+    });
+
+    await t.test('manual owner test rechecks the fresh authorized phone before dialing',async () => {
+        const f=await fixture();await activate(f);
+        const keys=['RECOVERY_OWNER_TEST_ENABLED','RECOVERY_OWNER_TEST_SHOP_ID','RECOVERY_OWNER_TEST_PHONE','RECOVERY_LIVE_ENABLED'];
+        const saved=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+        const before=dial.mock.calls.length;
+        let reads=0;
+        try {
+            Object.assign(process.env,{RECOVERY_OWNER_TEST_ENABLED:'1',RECOVERY_OWNER_TEST_SHOP_ID:f.shopId,RECOVERY_OWNER_TEST_PHONE:f.snapshot.phone,RECOVERY_LIVE_ENABLED:'1'});
+            await db.query(`UPDATE recovery_shops SET mode='live',webhooks_ready=TRUE WHERE id=$1`,[f.shopId]);
+            shopify.refreshCheckout.mock.mockImplementation(async()=>{
+                if(++reads===1)return f.snapshot;
+                const phone='+4900000000009',key=p.contactKey(f.shopId,phone);
+                await db.query(`INSERT INTO recovery_contacts(shop_id,contact_key,phone,consented_at,expires_at,evidence,consent_checkout_id)
+                    VALUES($1,$2,$3,NOW(),NOW()+INTERVAL '1 day','Synthetic secondary contact evidence',$4)`,[f.shopId,key,phone,f.checkoutId]);
+                return {...f.snapshot,phone};
+            });
+            await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true}),/call_result_unknown_do_not_retry/);
+            assert.equal(reads,2);assert.equal(dial.mock.calls.length,before);
+        } finally {
+            shopify.refreshCheckout.mock.mockImplementation(async(shop,id)=>(await db.query('SELECT snapshot FROM recovery_checkouts WHERE shop_id=$1 AND external_id=$2',[shop.id,id])).rows[0].snapshot);
+            for(const[key,value]of Object.entries(saved)){if(value===undefined)delete process.env[key];else process.env[key]=value;}
+            dial.mock.resetCalls();
+        }
+    });
+
     await t.test('no merchant activation, no consent, and foreign tenant all fail closed', async () => {
         const f = await fixture();
         await assert.rejects(s.startCall(f.customerId, f.shopId, f.checkoutId), /merchant_not_approved/);

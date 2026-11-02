@@ -89,6 +89,8 @@ function merchantRouter() {
     const router = express.Router();
     router.get('/', handle(async (req, res) => res.json(await service.dashboard(req.customer.id))));
     router.get('/summary', handle(async (req, res) => res.json(await service.dailySummary(req.customer.id))));
+    router.get('/settings', handle(async (req, res) => res.json(await require('./discounts').settings(req.customer.id))));
+    router.post('/:shopId/discounts', handle(async (req, res) => res.json(await require('./discounts').create(req.customer.id,req.params.shopId,req.body))));
     router.post('/oauth', handle(async (req, res) => res.json(await startOAuth(req.customer.id, req.body.domain))));
     router.post('/demo', handle(async (req, res) => res.json(await require('./browser-demo').browserDemo(req.customer.id, req.body.sdp))));
     router.post('/:shopId/settings', handle(async (req, res) => res.json(await service.saveSettings(req.customer.id, req.params.shopId, req.body))));
@@ -116,15 +118,16 @@ adminRouter.use(internal, (req, res, next) => {
 const toolsRouter = express.Router();
 toolsRouter.use((req, res, next) => req.method === 'POST' ? next() : res.sendStatus(405));
 toolsRouter.use(internal, handle(async (req, res) => {
-    const call = await service.callContext(req.get('x-call-token'));
     const name = req.path.slice(1);
+    // Expiry/deactivation must block new actions while still allowing this room to be closed.
+    const call = await service.callContext(req.get('x-call-token'), name === 'end');
     const started = performance.now();
     let result;
     switch (name) {
     case 'context': result = await service.getContext(call); break;
     case 'connected': result = await service.recordConnection(call); break;
     case 'confirm_identity': result = await service.confirmIdentity(call); break;
-    case 'offer': result = await service.getOffer(call, req.body.percent); break;
+    case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
     case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop'); break;
@@ -137,7 +140,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
         result = await shopify.orderStatus(shop, ctx.checkout.snapshot.customerId);
         break;
     }
-    case 'end': await telephony.hangup(call.room); result = { ended: true }; break;
+    case 'end': result = await service.endCall(call); break;
     case 'latency':
         if (!['response_latency', 'playout_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
         await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout' }, call.id, req.body.ms);

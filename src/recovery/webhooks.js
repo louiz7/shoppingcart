@@ -1,12 +1,13 @@
 'use strict';
 
-const { randomUUID, createHmac, timingSafeEqual } = require('node:crypto');
+const { randomUUID, timingSafeEqual } = require('node:crypto');
 const express = require('express');
 const { db, transaction, event } = require('./store');
 const shopify = require('./shopify');
 const policy = require('./policy');
 const service = require('./service');
 const telephony = require('./telephony');
+const { twilioSignature } = require('./twilio-signature');
 
 async function ingestShopify(shop, topic, payload, eventId) {
     return transaction(async (client) => {
@@ -40,13 +41,15 @@ async function ingestShopify(shop, topic, payload, eventId) {
             await client.query(`DELETE FROM recovery_orders WHERE shop_id=$1 AND external_id=ANY($2::text[])`,
             [shop.id, (payload.orders_to_redact || []).map(String)]);
         } else if (topic.startsWith('orders/')) {
-            if (!payload.id || !Number.isFinite(Date.parse(payload.updated_at)) || !Number.isFinite(Date.parse(payload.created_at))) throw policy.problem('invalid_order');
+            if (!payload.id || !Number.isFinite(Date.parse(payload.updated_at)) || !Number.isFinite(Date.parse(payload.created_at)) ||
+                (payload.test !== undefined && typeof payload.test !== 'boolean')) throw policy.problem('invalid_order');
             const net = policy.cents(payload.current_subtotal_price ?? payload.subtotal_price ?? '0');
             const paid = ['paid', 'partially_refunded'].includes(payload.financial_status) && !payload.cancelled_at;
             let orderPhone = null;
             try { orderPhone = policy.phone(payload.phone || payload.shipping_address?.phone || payload.customer?.phone); } catch { /* Unknown identities cannot be attributed. */ }
-            await client.query(`INSERT INTO recovery_orders(shop_id,external_id,checkout_token,checkout_external_id,phone,currency,paid,net_cents,source_updated_at,ordered_at,contact_key,paid_at)
-                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(shop_id,external_id) DO UPDATE SET
+            await client.query(`INSERT INTO recovery_orders(shop_id,external_id,checkout_token,checkout_external_id,phone,currency,paid,net_cents,source_updated_at,ordered_at,contact_key,paid_at,is_test)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$14) ON CONFLICT(shop_id,external_id) DO UPDATE SET
+                is_test=recovery_orders.is_test OR EXCLUDED.is_test,
                 paid=CASE WHEN recovery_orders.source_updated_at<=EXCLUDED.source_updated_at THEN EXCLUDED.paid ELSE recovery_orders.paid END,
                 net_cents=CASE WHEN recovery_orders.source_updated_at<=EXCLUDED.source_updated_at THEN EXCLUDED.net_cents ELSE recovery_orders.net_cents END,
                 source_updated_at=GREATEST(recovery_orders.source_updated_at,EXCLUDED.source_updated_at),
@@ -56,7 +59,11 @@ async function ingestShopify(shop, topic, payload, eventId) {
                 orderPhone,
                 payload.currency || shop.currency || 'EUR', paid,
                 payload.cancelled_at ? 0 : net, payload.updated_at, payload.created_at,
-                orderPhone ? policy.contactKey(shop.id, orderPhone) : null, paid ? payload.updated_at : null, topic]);
+                orderPhone ? policy.contactKey(shop.id, orderPhone) : null, paid ? payload.updated_at : null, topic, payload.test === true]);
+            // Keep exact checkout evidence after retention removes sensitive recovery tokens.
+            await client.query(`UPDATE recovery_orders o SET recovery_checkout_id=c.id FROM recovery_checkouts c
+                WHERE o.shop_id=$1 AND o.external_id=$2 AND o.recovery_checkout_id IS NULL AND c.shop_id=o.shop_id AND
+                ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id)`,[shop.id,String(payload.id)]);
             await client.query(`UPDATE recovery_checkouts c SET completed_at=COALESCE(c.completed_at,$2),status='converted'
                 FROM recovery_orders o WHERE o.shop_id=$1 AND o.external_id=$3 AND c.shop_id=o.shop_id AND
                 ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id OR
@@ -96,10 +103,10 @@ async function lifecycle(eventInput) {
             eventInput.event === 'room_finished') {
             // room_finished is a cleanup signal, never an authoritative billing timestamp.
             const fallback = eventInput.event === 'room_finished';
-            const seconds = call.connected_at && !fallback ? Math.max(0, (at - call.connected_at) / 1000) : null;
+            const seconds = call.connected_at && !fallback && at>=call.connected_at ? (at - call.connected_at) / 1000 : null;
             await client.query(`UPDATE recovery_calls SET ended_at=COALESCE(ended_at,$2),status='ended',
-                cost_cents=COALESCE(cost_cents,$3) WHERE id=$1`,
-            [call.id, at, seconds === null ? null : Math.ceil(seconds / 60 * policy.rules(call.rules).voiceCentsPerMinute)]);
+                cost_cents=COALESCE(cost_cents,$3),confirmed_duration_seconds=COALESCE(confirmed_duration_seconds,$4) WHERE id=$1`,
+            [call.id, at, seconds === null ? null : Math.ceil(seconds / 60 * policy.rules(call.rules).voiceCentsPerMinute),seconds]);
             await client.query(`UPDATE recovery_checkouts SET status='contacted' WHERE id=$1 AND status='calling'`, [call.checkout_id]);
         }
         await event(client, call.shop_id, 'call_lifecycle', { event: eventInput.event }, call.id);
@@ -135,16 +142,6 @@ router.post(['/shopify/:shopId/:capability', '/shopify/privacy'], express.raw({ 
         return res.json(result);
     } catch (error) { return res.status(error.status || 500).json({ error: error.code || 'webhook_processing_failed' }); }
 });
-
-function twilioSignature(url, params, supplied) {
-    if (!process.env.TWILIO_AUTH_TOKEN || typeof supplied !== 'string') return false;
-    if (typeof url !== 'string' || !params || typeof params !== 'object' || Array.isArray(params)) return false;
-    if (Object.values(params).some((v) => typeof v !== 'string')) return false;
-    const value = url + Object.keys(params).sort().map((key) => key + params[key]).join('');
-    const expected = createHmac('sha1', process.env.TWILIO_AUTH_TOKEN).update(value).digest('base64');
-    const a = Buffer.from(expected), b = Buffer.from(supplied);
-    return a.length === b.length && timingSafeEqual(a, b);
-}
 
 router.post('/twilio', express.urlencoded({ extended: false, limit: '8kb', parameterLimit: 100 }), async (req, res) => {
     try {
@@ -185,10 +182,11 @@ router.post('/twilio', express.urlencoded({ extended: false, limit: '8kb', param
 
 async function reconcileStops(shopId = null) {
     const { rows } = await db.query(`SELECT a.id,a.room FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
+        JOIN customers tenant ON tenant.id=s.customer_id
         JOIN recovery_contacts p ON p.shop_id=a.shop_id AND p.contact_key=a.contact_key
         JOIN recovery_checkouts c ON c.id=a.checkout_id
         WHERE ($1::uuid IS NULL OR a.shop_id=$1) AND a.status IN ('reserved','dialing','connected','unknown')
-        AND (NOT s.enabled OR p.stopped_at IS NOT NULL OR c.completed_at IS NOT NULL OR a.expires_at<NOW()) LIMIT 50`, [shopId]);
+        AND (NOT tenant.is_active OR NOT s.enabled OR p.stopped_at IS NOT NULL OR c.completed_at IS NOT NULL OR a.expires_at<NOW()) LIMIT 50`, [shopId]);
     await Promise.all(rows.map(async (row) => {
         try { await telephony.hangup(row.room); }
         catch { /* Retain the durable stop and retry cleanup on the next worker tick. */ }

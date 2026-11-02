@@ -1,0 +1,51 @@
+server {
+    listen 80;
+    server_name ecom.rescova.de;
+    access_log off;
+    error_log /var/log/nginx/rescova-ecom-error.log crit;
+    location ^~ /.well-known/acme-challenge/ { root /var/www/rescova-ecom-acme; }
+    location / { return 301 https://ecom.rescova.de$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    server_name ecom.rescova.de;
+    ssl_certificate /etc/letsencrypt/live/ecom.rescova.de/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/ecom.rescova.de/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    client_max_body_size 32k;
+    # OAuth codes, webhook path secrets and customer queries never enter access logs.
+    access_log off;
+    error_log /var/log/nginx/rescova-ecom-error.log crit;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+
+    proxy_set_header Host ecom.rescova.de;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_http_version 1.1;
+    proxy_read_timeout 65s;
+
+    location ^~ /internal/ { return 404; }
+    location ^~ /integrations/ { return 404; }
+    location ^~ /webhooks/recovery/shopify/ {
+        limit_except POST { deny all; }
+        client_max_body_size 1m;
+        proxy_pass http://127.0.0.1:3610;
+    }
+    location = /webhooks/recovery/twilio {
+        limit_except POST { deny all; }
+        client_max_body_size 8k;
+        proxy_pass http://127.0.0.1:3610;
+    }
+    location = /webhooks/livekit {
+        limit_except POST { deny all; }
+        client_max_body_size 1m;
+        proxy_pass http://127.0.0.1:3610;
+    }
+    location / { proxy_pass http://127.0.0.1:3673; }
+}

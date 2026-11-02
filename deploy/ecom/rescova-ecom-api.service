@@ -1,0 +1,28 @@
+[Unit]
+Description=Rescova Ecom API
+Requires=rescova-ecom-db.service
+After=network-online.target rescova-ecom-db.service
+
+[Service]
+Type=simple
+User=rescova-ecom
+Group=rescova-ecom
+WorkingDirectory=/opt/rescova-ecom/current
+EnvironmentFile=/etc/rescova-ecom/app.env
+Environment=PORT=3610
+ExecStart=/usr/bin/node src/recovery/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rescova-ecom
+InaccessiblePaths=/opt/rescova /opt/debtfree /opt/rescova-crm /var/lib/postgresql /var/lib/rescova-ecom-db
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

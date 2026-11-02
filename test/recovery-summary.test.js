@@ -73,6 +73,28 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
     }
     const asOf = new Date('2026-11-02T12:00:00Z');
 
+    await t.test('Shopify test payments never count as real conversions or contribution, including replayed edits', async () => {
+        const s = await shop(await tenant()), c = await checkout(s), control = await checkout(s);
+        const paidAt = new Date(Date.now()-9*86400000);
+        const connectedAt = new Date(+paidAt-3600000);
+        const a = await call(s, c, connectedAt, connectedAt);
+        await db.query('UPDATE recovery_calls SET cost_cents=0 WHERE id=$1', [a.id]);
+        await db.query(`UPDATE recovery_contacts SET enrolled_at=NOW()-INTERVAL '10 days',experiment_rules=$2,
+            arm=CASE WHEN contact_key=$3 THEN 'control' ELSE 'treatment' END WHERE shop_id=$1`,
+        [s.id, JSON.stringify(policy.rules()), control.key]);
+        const payload = await order(s, c, paidAt.toISOString(), { test: true });
+        assert.equal((await service.dailySummary(s.customer_id, new Date(+paidAt+1000))).shops[0].confirmedCheckoutsToday, 0);
+        const report = (await service.dashboard(s.customer_id)).experiments[0];
+        assert.equal(report.groups[0].contacts, 1); assert.equal(report.groups[1].contacts, 1);
+        assert.equal(report.groups[0].conversions, 0); assert.equal(report.groups[0].netContributionCents, 0);
+        assert.equal(report.incrementalContributionCents, 0);
+        await hooks.ingestShopify(s, 'orders/updated', { ...payload, test: false,
+            updated_at: new Date(+paidAt+300000).toISOString() }, randomUUID());
+        assert.equal((await db.query('SELECT is_test FROM recovery_orders WHERE shop_id=$1', [s.id])).rows[0].is_test, true);
+        assert.equal((await service.dailySummary(s.customer_id, new Date(+paidAt+1000))).shops[0].confirmedCheckoutsToday, 0);
+        await assert.rejects(hooks.ingestShopify(s, 'orders/paid', { ...payload, id: 'invalid-test-order', test: 'true' }, randomUUID()), /invalid_order/);
+    });
+
     await t.test('tenant, simulation, original checkout and actual payment evidence are required', async () => {
         const owner = await tenant(), outsider = await tenant();
         const s = await shop(owner), foreign = await shop(outsider), simulation = await shop(owner, 'Europe/Berlin', 'simulation');

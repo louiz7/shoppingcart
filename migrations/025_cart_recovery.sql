@@ -145,6 +145,7 @@ ALTER TABLE recovery_shops ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAU
 -- Unknown historical dial/payment times stay unknown; never infer them from creation timestamps.
 ALTER TABLE recovery_calls ADD COLUMN IF NOT EXISTS dialed_at TIMESTAMPTZ;
 ALTER TABLE recovery_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+ALTER TABLE recovery_orders ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS recovery_calls_dialed_time ON recovery_calls(shop_id,dialed_at) WHERE dialed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recovery_calls_checkout_connection ON recovery_calls(shop_id,checkout_id,connected_at) WHERE connected_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS recovery_orders_paid_time ON recovery_orders(shop_id,paid_at) WHERE paid AND paid_at IS NOT NULL;

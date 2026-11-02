@@ -1,0 +1,28 @@
+[Unit]
+Description=Rescova Ecom GPT Live worker (explicit activation required)
+Requires=rescova-ecom-api.service
+After=network-online.target rescova-ecom-api.service
+
+[Service]
+Type=simple
+User=rescova-ecom
+Group=rescova-ecom
+WorkingDirectory=/opt/rescova-ecom/current
+EnvironmentFile=/etc/rescova-ecom/app.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/rescova-ecom/current/.venv/bin/python agent/recovery.py start
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rescova-ecom
+InaccessiblePaths=/opt/rescova /opt/debtfree /opt/rescova-crm /var/lib/postgresql /var/lib/rescova-ecom-db
+MemoryMax=1024M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

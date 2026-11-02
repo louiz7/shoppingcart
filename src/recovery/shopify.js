@@ -83,6 +83,9 @@ async function graphql(shop, query, variables = {}) {
     });
     if (!response.ok) throw problem('shopify_unavailable', 502);
     const payload = await response.json();
+    if (payload.errors?.some((error) => error.extensions?.code === 'ACCESS_DENIED' && error.path?.at(-1) === 'phone')) {
+        throw problem('shopify_phone_access_required', 409);
+    }
     if (payload.errors?.length || !payload.data) throw problem('shopify_query_failed', 502);
     return payload.data;
 }
@@ -174,7 +177,7 @@ async function orderStatus(shop, customerId) {
     if (!customerId) throw problem('order_identity_missing', 409);
     const data = await graphql(shop, `query RecoveryOrders($id:ID!) {
         customer(id:$id) { orders(first:5,reverse:true,sortKey:CREATED_AT) { nodes {
-          name createdAt displayFinancialStatus displayFulfillmentStatus
+          name createdAt test displayFinancialStatus displayFulfillmentStatus
           fulfillments { status displayStatus trackingInfo { company number } }
         } } }
     }`, { id: customerId });

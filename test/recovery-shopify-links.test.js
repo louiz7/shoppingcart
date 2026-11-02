@@ -87,3 +87,25 @@ test('refresh verifies the exact checkout before returning its native URL and ne
     await assert.rejects(shopify.refreshCheckout(liveShop, 'gid://shopify/Order/1'), /checkout_unverified/);
     assert.equal(requests, 3);
 });
+
+test('redacted Shopify phone fields report the required access without accepting partial checkout data', async (t) => {
+    const previousKey = process.env.SHOPIFY_CREDENTIALS_KEY;
+    process.env.SHOPIFY_CREDENTIALS_KEY = '22'.repeat(32);
+    t.after(() => {
+        if (previousKey === undefined) delete process.env.SHOPIFY_CREDENTIALS_KEY;
+        else process.env.SHOPIFY_CREDENTIALS_KEY = previousKey;
+    });
+    const liveShop = { ...shop, mode: 'live', credentials_encrypted: shopify.encryptToken('synthetic-token') };
+    let errors = [{ message: 'Sensitive provider message must not be forwarded', extensions: { code: 'ACCESS_DENIED' },
+        path: ['abandonedCheckouts', 'nodes', 0, 'customer', 'phone'] }];
+    t.mock.method(global, 'fetch', async () => Response.json({ data: { abandonedCheckouts: {
+        nodes: [checkout()], pageInfo: { hasNextPage: false } } }, errors }));
+    await assert.rejects(shopify.listCheckouts(liveShop), (error) => {
+        assert.equal(error.code, 'shopify_phone_access_required'); assert.equal(error.status, 409);
+        assert.doesNotMatch(error.message, /Sensitive/); return true;
+    });
+    errors = [{ extensions: { code: 'ACCESS_DENIED' }, path: ['abandonedCheckouts', 'nodes', 0, 'shippingAddress', 'phone'] }];
+    await assert.rejects(shopify.listCheckouts(liveShop), /shopify_phone_access_required/);
+    errors = [{ extensions: { code: 'ACCESS_DENIED' }, path: ['abandonedCheckouts', 'nodes', 0, 'customer', 'email'] }];
+    await assert.rejects(shopify.listCheckouts(liveShop), /shopify_query_failed/);
+});

@@ -7,7 +7,8 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from livekit.agents import AgentServer, llm
 from livekit.plugins import openai
@@ -38,6 +39,11 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         for tool in agent.tools:
             schema = llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema()
             self.assertIsInstance(schema, dict)
+            if tool.info.name == 'get_offer':
+                self.assertIn('discount_id', schema['properties'])
+        agent.tool = AsyncMock(return_value='{"confirmed":true}')
+        await agent.get_offer(None, discount_id='approved-catalogue-id')
+        agent.tool.assert_awaited_once_with('offer', {'percent': 0, 'discountId': 'approved-catalogue-id'})
         # Configuration only: no AgentSession is started and no model socket is opened.
         model = openai.realtime.GPTLiveModel(api_key='test-only-not-a-real-key', model='gpt-live-1', voice='flitz',
             responses_options={'model': 'gpt-5.6-luna', 'instructions': module.BACKEND_INSTRUCTIONS, 'parallel_tool_calls': False})
@@ -50,6 +56,205 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn(b'Recovery live mode disabled', stderr)
         self.assertNotIn(b'connected', stdout.lower())
+
+
+class WorkerLifecycle(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        spec = importlib.util.spec_from_file_location('recovery_lifecycle_test', AGENT_PATH)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def fixture(self, failure=None, finish='session'):
+        module = self.module
+        participant = SimpleNamespace(identity='synthetic-buyer', attributes={'sip.callStatus': 'active'})
+        room = module.rtc.EventEmitter()
+        room.remote_participants = {participant.identity: participant}
+        ctx = SimpleNamespace(room=room,
+            job=SimpleNamespace(room=SimpleNamespace(metadata=json.dumps({'mode': 'recovery', 'call_token': 'a' * 64}))),
+            connect=AsyncMock(), wait_for_participant=AsyncMock(return_value=participant), shutdown=Mock(), failure=failure)
+        if failure == 'connect':
+            ctx.connect.side_effect = RuntimeError('synthetic connection failure')
+        if failure == 'sip_timeout':
+            ctx.wait_for_participant.side_effect = TimeoutError('synthetic SIP timeout')
+        if failure == 'early_hangup':
+            participant.attributes['sip.callStatus'] = 'ringing'
+            room.remote_participants = {}
+
+        class Response:
+            status = 409 if failure == 'context_denied' else 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+            async def json(self):
+                if failure == 'context_malformed':
+                    raise ValueError('synthetic malformed context')
+                return {'brand': 'Synthetic shop', 'brandVoice': 'Friendly'}
+
+            async def text(self):
+                return '{"ended":true}'
+
+        class HTTP:
+            requests = None
+            closed = False
+
+            def __init__(self):
+                self.requests = []
+                self.payloads = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                self.closed = True
+
+            def post(self, url, **kwargs):
+                name = url.rsplit('/', 1)[-1]
+                self.requests.append(name)
+                self.payloads.append((name, kwargs.get('json')))
+                if failure == 'context_transport' and name == 'connected':
+                    raise module.aiohttp.ClientConnectionError('synthetic offline gateway')
+                if failure == 'end_transport' and name == 'end':
+                    raise module.aiohttp.ClientConnectionError('synthetic offline cleanup')
+                return Response()
+
+        class Session(module.rtc.EventEmitter):
+            def __init__(self):
+                super().__init__()
+                self.started = asyncio.Event()
+                self.close_calls = 0
+                self.greeting_calls = 0
+                self.start_options = None
+
+            async def start(self, **options):
+                self.start_options = options
+                self.started.set()
+                if failure == 'session_start':
+                    raise RuntimeError('synthetic model setup failure')
+                if finish == 'during_start':
+                    self.emit('close', None)
+
+            async def generate_reply(self, **_):
+                self.greeting_calls += 1
+                if failure == 'greeting':
+                    raise RuntimeError('synthetic greeting failure')
+                if finish == 'conversation_items':
+                    for item in [module.llm.AgentHandoff(old_agent_id=None, new_agent_id='synthetic-agent'),
+                                 module.llm.FunctionCall(call_id='synthetic-call', name='synthetic-tool', arguments='{}'),
+                                 module.llm.ChatMessage(role='user', content=['Synthetic user text']),
+                                 module.llm.ChatMessage(role='assistant', content=[]),
+                                 module.llm.ChatMessage(role='assistant', content=['Synthetic assistant greeting'])]:
+                        self.emit('conversation_item_added', SimpleNamespace(item=item))
+                    self.emit('close', None)
+                elif finish == 'provider_error':
+                    self.emit('close', SimpleNamespace(reason=module.CloseReason.ERROR))
+                if finish == 'session':
+                    self.emit('close', None)
+                elif finish == 'buyer':
+                    room.emit('participant_disconnected', participant)
+                elif finish == 'room':
+                    room.emit('disconnected', None)
+
+            async def aclose(self):
+                self.close_calls += 1
+                if failure == 'session_close':
+                    raise RuntimeError('synthetic close failure')
+
+        return ctx, HTTP(), Session()
+
+    async def run_fixture(self, ctx, http, session):
+        # Every network-bearing SDK/HTTP boundary is replaced before entrypoint runs.
+        with patch.object(self.module.aiohttp, 'ClientSession', return_value=http), \
+                patch.object(self.module.openai.realtime, 'GPTLiveModel', return_value=object(),
+                    side_effect=RuntimeError('synthetic model construction failure') if ctx.failure == 'model' else None), \
+                patch.object(self.module, 'AgentSession', return_value=session):
+            await self.module.entrypoint(ctx)
+
+    async def test_startup_failures_and_preanswer_hangup_always_attempt_backend_cleanup(self):
+        for failure in ['connect', 'sip_timeout', 'context_transport', 'context_denied',
+                        'context_malformed', 'early_hangup', 'model', 'session_start', 'greeting']:
+            with self.subTest(failure=failure):
+                ctx, http, session = self.fixture(failure)
+                if failure in ['context_denied', 'early_hangup']:
+                    await self.run_fixture(ctx, http, session)
+                else:
+                    with self.assertRaises((RuntimeError, TimeoutError, ValueError, self.module.aiohttp.ClientError)):
+                        await self.run_fixture(ctx, http, session)
+                self.assertEqual(http.requests.count('end'), 1)
+                self.assertTrue(http.closed)
+                ctx.shutdown.assert_called_once()
+                self.assertEqual(session.close_calls, int(failure in ['session_start', 'greeting']))
+
+    async def test_close_disconnect_and_cleanup_failure_do_not_leave_worker_sleeping(self):
+        for failure, finish in [(None, 'session'), (None, 'buyer'), (None, 'room'),
+                                (None, 'during_start'), ('session_close', 'session'), ('end_transport', 'session')]:
+            with self.subTest(failure=failure, finish=finish):
+                ctx, http, session = self.fixture(failure, finish)
+                await asyncio.wait_for(self.run_fixture(ctx, http, session), 1)
+                self.assertEqual(http.requests.count('end'), 1)
+                self.assertEqual(session.close_calls, 1)
+                self.assertEqual(session.greeting_calls, int(finish != 'during_start'))
+                self.assertTrue(http.closed)
+                ctx.shutdown.assert_called_once()
+
+    async def test_cancellation_still_cleans_up_and_propagates(self):
+        ctx, http, session = self.fixture(finish='stay_connected')
+        task = asyncio.create_task(self.run_fixture(ctx, http, session))
+        await session.started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(http.requests.count('end'), 1)
+        self.assertIs(session.start_options['record'], False)
+        self.assertEqual(session.close_calls, 1)
+        self.assertTrue(http.closed)
+        ctx.shutdown.assert_called_once()
+
+    async def test_handoff_and_tool_events_never_break_assistant_transcript_recording(self):
+        ctx, http, session = self.fixture(finish='conversation_items')
+        with self.assertNoLogs('livekit', level='ERROR'):
+            await self.run_fixture(ctx, http, session)
+        transcripts = [payload for name, payload in http.payloads if name == 'transcript']
+        self.assertEqual(len(transcripts), 1)
+        self.assertEqual(transcripts[0]['role'], 'assistant')
+        self.assertEqual(transcripts[0]['text'], 'Synthetic assistant greeting')
+        self.assertEqual(http.requests.count('end'), 1)
+
+    async def test_fatal_voice_service_failure_records_generic_result_before_cleanup(self):
+        ctx, http, session = self.fixture(finish='provider_error')
+        await self.run_fixture(ctx, http, session)
+        self.assertEqual(http.requests, ['connected', 'outcome', 'end'])
+        result = next(payload for name, payload in http.payloads if name == 'outcome')
+        self.assertEqual(result['outcome'], 'human_needed')
+        self.assertNotIn('credit', result['summary'])
+        self.assertEqual(session.close_calls, 1)
+        ctx.shutdown.assert_called_once()
+
+    async def test_invalid_metadata_never_connects_or_opens_http(self):
+        for metadata in ['{broken', '[]', 'null', '{"mode":"recovery","call_token":"bad"}', '{"mode":"collection"}']:
+            with self.subTest(metadata=metadata):
+                ctx, http, session = self.fixture()
+                ctx.job.room.metadata = metadata
+                await self.run_fixture(ctx, http, session)
+                ctx.connect.assert_not_awaited()
+                self.assertEqual(http.requests, [])
+                ctx.shutdown.assert_called_once_with(reason='recovery_invalid_metadata')
+
+    async def test_gateway_never_sends_credentials_to_a_remote_or_ambiguous_destination(self):
+        _, http, _ = self.fixture()
+        for value in ['https://external.example.invalid', 'http://external.example.invalid',
+                      'http://localhost@external.example.invalid', 'http://user:secret@localhost',
+                      'http://localhost/path', 'http://localhost?next=external', 'http://localhost#fragment']:
+            with self.subTest(value=value), patch.dict(os.environ, {'TOOL_GATEWAY_URL': value}):
+                with self.assertRaises(ValueError):
+                    await self.module.backend_tool(http, 'a' * 64, 'context')
+                self.assertEqual(http.requests, [])
+        for value in ['http://127.0.0.1:3110', 'http://localhost:3110/', 'http://[::1]:3110']:
+            with self.subTest(value=value), patch.dict(os.environ, {'TOOL_GATEWAY_URL': value}):
+                self.assertEqual(self.module.gateway_url(), value.rstrip('/'))
 
 
 if __name__ == '__main__':

@@ -6,9 +6,11 @@ declare global {
 				customerId: number;
 				email: string;
 				displayName: string;
+				organizationName: string;
 				role: 'admin' | 'operator' | 'viewer';
 				emailAutomationEnabled: boolean;
 				isRescovaAdminOrganization: boolean;
+				isRecoveryInternal: boolean;
 			} | null;
 		}
 		interface PageData {

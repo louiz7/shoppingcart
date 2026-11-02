@@ -1,0 +1,28 @@
+[Unit]
+Description=Rescova Ecom isolated PostgreSQL
+After=network.target
+
+[Service]
+Type=simple
+User=rescova-ecom-db
+Group=rescova-ecom-db
+RuntimeDirectory=rescova-ecom-db
+RuntimeDirectoryMode=0750
+ExecStart=/usr/lib/postgresql/18/bin/postgres -D /var/lib/rescova-ecom-db
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rescova-ecom-db /run/rescova-ecom-db
+InaccessiblePaths=/opt/rescova /opt/debtfree /opt/rescova-crm /var/lib/postgresql
+MemoryMax=768M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

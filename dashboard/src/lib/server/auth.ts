@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { promisify } from 'node:util';
 import type { Cookies } from '@sveltejs/kit';
 import { db } from './db';
+import { env } from '$env/dynamic/private';
 
 const scrypt = promisify(scryptCallback);
 const COOKIE_NAME = 'rescova_session';
@@ -10,12 +11,22 @@ const SESSION_DAYS = 14;
 export type PlatformUser = NonNullable<App.Locals['user']>;
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+	if (!/^scrypt\$v1\$[a-f0-9]{32}\$[a-f0-9]{128}$/.test(stored)) return false;
 	const [algorithm, version, saltHex, expectedHex] = stored.split('$');
 	if (algorithm !== 'scrypt' || version !== 'v1' || !saltHex || !expectedHex) return false;
 
 	const expected = Buffer.from(expectedHex, 'hex');
 	const actual = (await scrypt(password, Buffer.from(saltHex, 'hex'), expected.length)) as Buffer;
 	return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+export function recoveryDestination(user: { isRecoveryInternal: boolean }, requested?: string | null): string {
+	const fallback = user.isRecoveryInternal ? '/recovery/organizations' : '/recovery';
+	if (!requested || !requested.startsWith('/') || requested.startsWith('//') || /[\\\x00-\x20\x7f]/.test(requested)) return fallback;
+	const path = new URL(requested, 'http://localhost').pathname;
+	if (path === '/' || path === '/login' || path === '/register') return fallback;
+	if (env.RECOVERY_ONLY === '1' && path !== '/recovery' && !path.startsWith('/recovery/') && path !== '/admin/integrations/shopify/callback') return fallback;
+	return requested;
 }
 
 function tokenHash(token: string): string {
@@ -55,20 +66,15 @@ export async function getSessionUser(cookies: Cookies): Promise<PlatformUser | n
 		customer_id: number;
 		email: string;
 		display_name: string;
+		organization_name: string;
 		role: PlatformUser['role'];
 		email_automation_enabled: boolean;
-		is_rescova_admin_organization: boolean;
+		is_rescova_internal: boolean;
 		last_seen_at: Date;
 	}>(
-		`SELECT u.id, u.customer_id, u.email, u.display_name, u.role,
+		`SELECT u.id, u.customer_id, u.email, u.display_name, u.role,c.name AS organization_name,
 		        c.email_automation_enabled, s.last_seen_at,
-		        EXISTS (
-		          SELECT 1
-		            FROM platform_users rescova_admin
-		           WHERE rescova_admin.customer_id = u.customer_id
-		             AND LOWER(rescova_admin.email) = 'milan@rescova.de'
-		             AND rescova_admin.active
-		        ) AS is_rescova_admin_organization
+		        COALESCE((to_jsonb(c)->>'is_rescova_internal')::boolean,FALSE) AS is_rescova_internal
 		   FROM platform_sessions s
 		   JOIN platform_users u ON u.id = s.user_id
 		   JOIN customers c ON c.id = u.customer_id
@@ -94,8 +100,10 @@ export async function getSessionUser(cookies: Cookies): Promise<PlatformUser | n
 		customerId: rows[0].customer_id,
 		email: rows[0].email,
 		displayName: rows[0].display_name,
+		organizationName: rows[0].organization_name,
 		role: rows[0].role,
 		emailAutomationEnabled: rows[0].email_automation_enabled,
-		isRescovaAdminOrganization: rows[0].is_rescova_admin_organization
+		isRescovaAdminOrganization: rows[0].is_rescova_internal && rows[0].role === 'admin',
+		isRecoveryInternal: rows[0].is_rescova_internal && rows[0].role === 'admin'
 	};
 }

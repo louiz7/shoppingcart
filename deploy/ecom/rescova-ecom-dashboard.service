@@ -1,0 +1,28 @@
+[Unit]
+Description=Rescova Ecom organization dashboard
+Requires=rescova-ecom-api.service
+After=rescova-ecom-api.service
+
+[Service]
+Type=simple
+User=rescova-ecom
+Group=rescova-ecom
+WorkingDirectory=/opt/rescova-ecom/current/dashboard
+EnvironmentFile=/etc/rescova-ecom/app.env
+Environment=HOST=127.0.0.1 PORT=3673 ORIGIN=https://ecom.rescova.de ADDRESS_HEADER=x-real-ip BODY_SIZE_LIMIT=32768
+ExecStart=/usr/bin/node build/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rescova-ecom
+InaccessiblePaths=/opt/rescova /opt/debtfree /opt/rescova-crm /var/lib/postgresql /var/lib/rescova-ecom-db
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

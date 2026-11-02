@@ -5,6 +5,8 @@ const { db, transaction, event } = require('./store');
 const policy = require('./policy');
 const shopify = require('./shopify');
 const telephony = require('./telephony');
+const discounts = require('./discounts');
+const { TwirpError } = require('livekit-server-sdk');
 
 const hash = (text) => createHash('sha256').update(text).digest('hex');
 const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
@@ -130,12 +132,26 @@ async function enroll(client, ctx) {
     return arm;
 }
 
-async function startCall(customerId, shopId, checkoutId) {
+async function startCall(customerId, shopId, checkoutId, options = {}) {
+    const ownerTest = options.ownerTest===true;
+    let testNumber;
+    if (ownerTest) {
+        if (process.env.RECOVERY_OWNER_TEST_ENABLED!=='1' || process.env.RECOVERY_OWNER_TEST_SHOP_ID!==shopId) {
+            throw policy.problem('owner_test_not_authorized',409);
+        }
+        try { testNumber=policy.phone(process.env.RECOVERY_OWNER_TEST_PHONE); }
+        catch { throw policy.problem('owner_test_not_authorized',409); }
+    }
     await refresh(customerId, shopId, checkoutId);
     const reservation = await transaction(async (client) => {
+        // Shared with the restricted release receiver: pause and reservation must serialize.
+        await client.query('SELECT pg_advisory_xact_lock(72632026029)');
+        const guard = await client.query('SELECT paused_until>NOW() AS paused FROM recovery_deployment_guard WHERE id=1');
+        if (guard.rowCount!==1 || guard.rows[0].paused) throw policy.problem('deployment_in_progress',503);
         const shop = await shopFor(customerId, shopId, client, true);
         const ctx = await state(client, shop, checkoutId, true);
-        const denied = policy.eligibility(ctx);
+        if (ownerTest && (shop.mode!=='live' || ctx.checkout.phone!==testNumber)) throw policy.problem('owner_test_not_authorized',409);
+        const denied = policy.eligibility(ctx,new Date(),'call',ownerTest);
         if (denied) throw policy.problem(denied, 409);
         if (shop.mode === 'live' && !shop.webhooks_ready) throw policy.problem('webhooks_not_ready', 409);
         if (shop.mode === 'live' && (process.env.RECOVERY_LIVE_ENABLED !== '1' || !telephony.configured())) {
@@ -144,33 +160,37 @@ async function startCall(customerId, shopId, checkoutId) {
         // shortcut: one active call per shop in the pilot; widen with a tested budgeted scheduler.
         const busy = await client.query(`SELECT 1 FROM recovery_calls WHERE shop_id=$1 AND status IN ('reserved','dialing','connected','unknown') LIMIT 1`, [shop.id]);
         if (busy.rowCount) throw policy.problem('shop_busy', 409);
-        const arm = await enroll(client, ctx);
+        const arm = ownerTest ? null : await enroll(client, ctx);
         if (arm === 'control') return { control: true };
         const id = randomUUID(), token = randomBytes(32).toString('hex'), room = `recovery-${id}`;
-        await client.query(`INSERT INTO recovery_calls(id,shop_id,checkout_id,contact_key,room,token_hash,expires_at,status)
-            VALUES($1,$2,$3,$4,$5,$6,NOW()+INTERVAL '15 minutes',$7)`,
-        [id, shop.id, checkoutId, ctx.checkout.contact_key, room, hash(token), shop.mode === 'simulation' ? 'simulated' : 'reserved']);
+        await client.query(`INSERT INTO recovery_calls(id,shop_id,checkout_id,contact_key,room,token_hash,expires_at,status,is_test)
+            VALUES($1,$2,$3,$4,$5,$6,NOW()+INTERVAL '15 minutes',$7,$8)`,
+        [id, shop.id, checkoutId, ctx.checkout.contact_key, room, hash(token), shop.mode === 'simulation' ? 'simulated' : 'reserved',ownerTest]);
         if (shop.mode === 'simulation') {
             await event(client, shop.id, 'simulation_call', { checkoutId, noExternalAction: true }, id);
             return { simulated: true, id };
         }
-        return { id, room, token };
+        return { id, room, token,number: ctx.checkout.phone,contactKey: ctx.checkout.contact_key };
     });
     if (reservation.control || reservation.simulated) return reservation;
     // The intent is durable before contacting the provider. Ambiguous failures never auto-retry.
     try {
+        await refresh(customerId,shopId,checkoutId);
         const number = await transaction(async (client) => {
             const shop = await shopFor(customerId, shopId, client, true);
             const ctx = await state(client, shop, checkoutId, true);
-            const denied = policy.eligibility(ctx, new Date(), 'action');
+            const denied = policy.eligibility(ctx, new Date(), 'action',ownerTest);
             if (denied) throw policy.problem(denied, 409);
+            if (ctx.checkout.phone!==reservation.number || ctx.checkout.contact_key!==reservation.contactKey ||
+                (ownerTest && ctx.checkout.phone!==testNumber)) throw policy.problem('call_authorization_changed',409);
             return ctx.checkout.phone;
         });
         await telephony.dial(reservation, number, reservation.token);
         const acknowledged = await db.query(`UPDATE recovery_calls SET dialed_at=COALESCE(dialed_at,NOW()),
             status=CASE WHEN status='reserved' THEN 'dialing' ELSE status END WHERE id=$1 RETURNING status`, [reservation.id]);
         const latest = await state(db, await shopFor(customerId, shopId), checkoutId);
-        if (policy.eligibility(latest, new Date(), 'action')) await telephony.hangup(reservation.room);
+        if (policy.eligibility(latest,new Date(),'action',ownerTest) || latest.checkout.phone!==reservation.number ||
+            latest.checkout.contact_key!==reservation.contactKey) await telephony.hangup(reservation.room);
         await db.query(`UPDATE recovery_checkouts SET status='calling' WHERE id=$1 AND shop_id=$2 AND status='pending'
             AND EXISTS(SELECT 1 FROM recovery_calls WHERE id=$3 AND status IN ('dialing','connected'))`, [checkoutId, shopId, reservation.id]);
         return { id: reservation.id, status: acknowledged.rows[0].status };
@@ -199,30 +219,54 @@ async function stopContact(customerId, shopId, checkoutId, reason = 'merchant_st
     return { stopped: true, hangupPending: results.some((r) => r.status === 'rejected') };
 }
 
-async function callContext(token) {
+async function callContext(token, cleanup = false) {
     if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw policy.problem('invalid_call_token', 401);
     const { rows } = await db.query(`SELECT a.*,s.customer_id FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
-        JOIN customers c ON c.id=s.customer_id WHERE a.token_hash=$1 AND a.expires_at>NOW()
-        AND a.status IN ('reserved','dialing','connected') AND c.is_active`, [hash(token)]);
+        JOIN customers c ON c.id=s.customer_id WHERE a.token_hash=$1 AND
+        ((a.expires_at>NOW() AND a.status IN ('reserved','dialing','connected') AND c.is_active)
+        OR ($2::boolean AND s.mode='live' AND a.status!='simulated'))`, [hash(token), cleanup]);
     if (!rows[0]) throw policy.problem('invalid_call_token', 401);
     return rows[0];
+}
+
+async function endCall(call) {
+    const { rows } = await db.query(`SELECT a.* FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
+        WHERE a.id=$1 AND a.shop_id=$2 AND a.checkout_id=$3 AND s.customer_id=$4
+        AND s.mode='live' AND a.status!='simulated'`, [call.id,call.shop_id,call.checkout_id,call.customer_id]);
+    const actual = rows[0];
+    if (!actual || actual.room!==`recovery-${actual.id}`) throw policy.problem('invalid_call_token',401);
+    if (actual.status==='ended' && actual.ended_at) return { ended: true };
+    try { await telephony.hangup(actual.room); }
+    catch (error) {
+        if (!(error instanceof TwirpError && error.status===404 && error.code==='not_found')) throw error;
+    }
+    await transaction(async (client) => {
+        await client.query(`UPDATE recovery_calls SET status='ended',ended_at=COALESCE(ended_at,NOW())
+            WHERE id=$1 AND shop_id=$2 AND checkout_id=$3`, [actual.id,actual.shop_id,actual.checkout_id]);
+        await client.query(`UPDATE recovery_checkouts SET status='contacted' WHERE id=$1 AND shop_id=$2 AND status='calling'`,
+            [actual.checkout_id,actual.shop_id]);
+        // Room deletion confirms cleanup, but supplies no SIP duration or billable cost.
+        await event(client,actual.shop_id,'call_cleanup_confirmed',{ source: 'livekit_delete_room' },actual.id);
+    });
+    return { ended: true };
 }
 
 async function getContext(call) {
     if (!call.identity_verified) {
         const shop = await shopFor(call.customer_id, call.shop_id);
         const ctx = await state(db, shop, call.checkout_id);
-        const denied = policy.eligibility(ctx, new Date(), 'action');
+        const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
         return { brand: shop.brand, brandVoice: shop.brand_voice, identityRequired: true };
     }
     const ctx = await refresh(call.customer_id, call.shop_id, call.checkout_id);
-    const denied = policy.eligibility(ctx, new Date(), 'action');
+    const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
     return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice,
         cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
             shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
-        maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent };
+        maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,
+        availableDiscounts: await discounts.available(ctx.shop,ctx.checkout.subtotal_cents) };
 }
 
 async function recordConnection(call) {
@@ -250,10 +294,10 @@ async function dailySummary(customerId, asOf = new Date()) {
     ) SELECT d.id,d.brand,d.domain,d.timezone AS "timeZone",d.date,
         (SELECT count(*)::int FROM recovery_calls a WHERE a.shop_id=d.id AND a.status!='simulated'
             AND a.dialed_at>=d.starts_at AND a.dialed_at<d.ends_at) AS "callsToday",
-        (SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=d.id AND o.paid AND o.currency=d.currency
+        (SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=d.id AND o.paid AND NOT o.is_test AND o.currency=d.currency
             AND o.paid_at>=d.starts_at AND o.paid_at<d.ends_at AND EXISTS (
                 SELECT 1 FROM recovery_checkouts checkout JOIN recovery_calls a ON a.checkout_id=checkout.id AND a.shop_id=checkout.shop_id
-                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND a.connected_at IS NOT NULL
+                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL
                     AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                     AND ((o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id)
             )) AS "confirmedCheckoutsToday"
@@ -261,29 +305,41 @@ async function dailySummary(customerId, asOf = new Date()) {
     return { asOf: asOf.toISOString(), shops: rows };
 }
 
-async function getOffer(call, percent) {
+async function getOffer(call, percent, discountId) {
     if (!call.identity_verified) throw policy.problem('identity_required', 409);
-    await refresh(call.customer_id, call.shop_id, call.checkout_id);
+    const current = await refresh(call.customer_id, call.shop_id, call.checkout_id);
+    const previous = await db.query(`SELECT data FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
+    const selected = discountId ?? previous.rows[0]?.data.discountId;
+    const approved = selected ? await discounts.verify(current.shop,selected,current.checkout.subtotal_cents) : null;
+    if (discountId!==undefined && discountId!==null && !uuid(discountId)) throw policy.problem('discount_not_available',409);
+    if (approved) percent = approved.percent;
     const reserved = await transaction(async (client) => {
         const shop = await shopFor(call.customer_id, call.shop_id, client, true);
         const ctx = await state(client, shop, call.checkout_id, true);
-        const denied = policy.eligibility(ctx, new Date(), 'action');
+        const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
         const snapshot = ctx.checkout.snapshot;
         if (!snapshot.items?.length || snapshot.items.some((i) => !i.available || !i.variantId ||
             i.currentPriceCents !== i.originalUnitCents) || snapshot.discountCodes?.length) throw policy.problem('cart_offer_needs_review', 409);
         const amount = policy.offer(shop.rules, ctx.checkout.subtotal_cents, percent);
+        if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
         const { rows } = await client.query(`SELECT * FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
         if (rows[0]) {
             if (!['confirmed', 'simulated'].includes(rows[0].status) || new Date(rows[0].data.expiresAt) <= new Date() ||
                 rows[0].data.cartHash !== policy.cartHash(snapshot) ||
-                rows[0].data.percent > policy.rules(shop.rules).maxDiscountPercent) throw policy.problem('offer_not_valid', 409);
+                rows[0].data.percent > policy.rules(shop.rules).maxDiscountPercent ||
+                (approved && (rows[0].data.discountId!==approved.id || rows[0].data.discountFingerprint!==approved.fingerprint))) throw policy.problem('offer_not_valid', 409);
             return { existing: true, data: rows[0].data };
         }
-        const code = percent ? `RC${randomBytes(8).toString('hex').toUpperCase()}` : null;
-        const expiresAt = new Date(Date.now() + policy.rules(shop.rules).offerHours * 3600000).toISOString();
+        if (percent && !approved && (await client.query('SELECT 1 FROM recovery_discounts WHERE shop_id=$1 LIMIT 1',[shop.id])).rowCount) {
+            throw policy.problem('approved_discount_required',409);
+        }
+        const code = approved?.code || (percent ? `RC${randomBytes(8).toString('hex').toUpperCase()}` : null);
+        const expiresAt = new Date(Math.min(Date.now() + policy.rules(shop.rules).offerHours * 3600000,
+            approved ? Date.parse(approved.expiresAt) : Infinity)).toISOString();
         const result = { ...amount, currency: ctx.checkout.currency, code, expiresAt, checkoutUrl: policy.checkoutUrl(snapshot.checkoutUrl, shop, code),
-            cartHash: policy.cartHash(snapshot), simulated: shop.mode === 'simulation' };
+            cartHash: policy.cartHash(snapshot), simulated: shop.mode === 'simulation',
+            ...(approved ? { discountId: approved.id,discountFingerprint: approved.fingerprint } : {}) };
         // Commit the code before Shopify is called: crashes/timeouts cannot create a second offer.
         const id = randomUUID();
         await client.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'offer',$3,$4)`,
@@ -295,32 +351,35 @@ async function getOffer(call, percent) {
         const authorized = await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
-            const denied = policy.eligibility(ctx, new Date(), 'action');
+            const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
             if (denied) throw policy.problem(denied, 409);
             policy.offer(shop.rules, ctx.checkout.subtotal_cents, reserved.data.percent);
+            if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
             if (reserved.data.cartHash !== policy.cartHash(ctx.checkout.snapshot)) throw policy.problem('cart_changed', 409);
             return { shop, snapshot: ctx.checkout.snapshot };
         });
-        if (reserved.data.percent && authorized.shop.mode === 'live') {
+        if (reserved.data.percent && !approved && authorized.shop.mode === 'live') {
             await shopify.createDiscount(authorized.shop, authorized.snapshot, reserved.data.code, reserved.data.percent, reserved.data.expiresAt);
         }
         return await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
-            const denied = policy.eligibility(ctx, new Date(), 'action');
+            const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
             if (denied) throw policy.problem(denied, 409);
+            if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
             if (reserved.data.cartHash !== policy.cartHash(ctx.checkout.snapshot)) throw policy.problem('cart_changed', 409);
             await client.query(`UPDATE recovery_actions SET status=$2 WHERE id=$1`, [reserved.id, reserved.data.simulated ? 'simulated' : 'confirmed']);
             await event(client, shop.id, 'offer_created', { percent, simulated: reserved.data.simulated }, call.id);
             return reserved.data;
         });
-    } catch {
-        await db.query(`UPDATE recovery_actions SET status='unknown' WHERE id=$1 AND status='pending'`, [reserved.id]);
+    } catch (error) {
+        await db.query(`UPDATE recovery_actions SET status=$2 WHERE id=$1 AND status='pending'`, [reserved.id,approved ? 'failed' : 'unknown']);
+        if (approved) throw error;
         throw policy.problem('offer_result_unknown_do_not_retry', 502);
     }
 }
 
-async function authorizeLink(client, call, shop, ctx) {
+async function authorizeLink(client, call, shop, ctx, discountProof) {
     const { rows: calls } = await client.query(`SELECT id FROM recovery_calls WHERE id=$1 AND shop_id=$2
         AND checkout_id=$3 AND contact_key=$4 AND identity_verified AND expires_at>NOW()
         AND status IN ('reserved','dialing','connected')`, [call.id, shop.id, call.checkout_id, ctx.checkout.contact_key]);
@@ -337,6 +396,12 @@ async function authorizeLink(client, call, shop, ctx) {
         new Date(offer.expiresAt) <= new Date() || offer.cartHash !== policy.cartHash(ctx.checkout.snapshot) ||
         offer.currency !== ctx.checkout.currency || offer.percent > policy.rules(shop.rules).maxDiscountPercent) throw policy.problem('valid_offer_required', 409);
     policy.offer(shop.rules, ctx.checkout.subtotal_cents, offer.percent);
+    if (offer.discountId) {
+        await discounts.assertApproved(client,shop,discountProof,ctx.checkout.subtotal_cents);
+        if (discountProof.id!==offer.discountId || discountProof.fingerprint!==offer.discountFingerprint ||
+            discountProof.code!==offer.code || discountProof.percent!==offer.percent ||
+            new Date(offer.expiresAt)>new Date(discountProof.expiresAt)) throw policy.problem('valid_offer_required',409);
+    }
     return { consentEvent: transcripts[0].data.eventId, offerId: offers[0].id,
         cartHash: offer.cartHash, checkoutUrl: policy.checkoutUrl(offer.checkoutUrl, shop) };
 }
@@ -344,15 +409,16 @@ async function authorizeLink(client, call, shop, ctx) {
 async function sendLink(call) {
     if (!call.identity_verified) throw policy.problem('identity_required', 409);
     await refresh(call.customer_id, call.shop_id, call.checkout_id);
+    const initialDiscountProof = await discounts.offerProof(call);
     const action = await transaction(async (client) => {
         const shop = await shopFor(call.customer_id, call.shop_id, client, true);
         const ctx = await state(client, shop, call.checkout_id, true);
-        const denied = policy.eligibility(ctx, new Date(), 'action');
+        const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
         const { rows: prior } = await client.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [call.checkout_id]);
         if (prior[0]) return { duplicate: true, status: prior[0].status };
         if (shop.mode === 'live') telephony.assertSmsReady();
-        const authorization = await authorizeLink(client, call, shop, ctx);
+        const authorization = await authorizeLink(client, call, shop, ctx, initialDiscountProof);
         const id = randomUUID();
         await client.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'sms',$3,$4)`,
         [id, call.checkout_id, shop.mode === 'simulation' ? 'simulated' : 'pending', JSON.stringify(authorization)]);
@@ -362,12 +428,13 @@ async function sendLink(call) {
     if (action.duplicate || action.simulated) return { status: action.status || 'simulated', duplicate: !!action.duplicate };
     let dispatched = false;
     try {
+        const latestDiscountProof = await discounts.offerProof(call);
         const text = await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
-            const denied = policy.eligibility(ctx, new Date(), 'action');
+            const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
             if (denied) throw policy.problem(denied, 409);
-            const authorization = await authorizeLink(client, call, shop, ctx);
+            const authorization = await authorizeLink(client, call, shop, ctx, latestDiscountProof);
             if (ctx.checkout.phone !== action.number || Object.keys(action.authorization).some((key) =>
                 authorization[key] !== action.authorization[key])) throw policy.problem('sms_authorization_changed', 409);
             return `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
@@ -440,10 +507,10 @@ async function dashboard(customerId) {
         WHERE s.customer_id=$1 AND duration_ms IS NOT NULL AND s.mode='live' AND e.created_at>NOW()-INTERVAL '7 days'
         GROUP BY e.kind`, [customerId]);
     const { rows: experiment } = await db.query(`SELECT p.arm,s.id AS shop_id,
-        EXISTS(SELECT 1 FROM recovery_orders o WHERE o.shop_id=p.shop_id AND o.contact_key=p.contact_key AND o.paid AND o.currency=s.currency
+        EXISTS(SELECT 1 FROM recovery_orders o WHERE o.shop_id=p.shop_id AND o.contact_key=p.contact_key AND o.paid AND NOT o.is_test AND o.currency=s.currency
             AND o.ordered_at>=p.enrolled_at AND o.ordered_at<p.enrolled_at+INTERVAL '7 days') AS purchased,
         COALESCE((SELECT SUM(o.net_cents)*(p.experiment_rules->>'contributionPercent')::numeric/100
-            FROM recovery_orders o WHERE o.shop_id=p.shop_id AND o.contact_key=p.contact_key AND o.paid AND o.currency=s.currency
+            FROM recovery_orders o WHERE o.shop_id=p.shop_id AND o.contact_key=p.contact_key AND o.paid AND NOT o.is_test AND o.currency=s.currency
             AND o.ordered_at>=p.enrolled_at AND o.ordered_at<p.enrolled_at+INTERVAL '7 days'),0) AS contribution_cents,
         (SELECT COALESCE(SUM(a.cost_cents),0) FROM recovery_calls a WHERE a.shop_id=p.shop_id AND a.contact_key=p.contact_key) AS costs_cents,
         (SELECT COUNT(*) FROM recovery_calls a WHERE a.shop_id=p.shop_id AND a.contact_key=p.contact_key AND a.cost_cents IS NULL) AS unknown_costs
@@ -469,4 +536,4 @@ async function dashboard(customerId) {
 }
 
 module.exports = { uuid, hash, shopFor, state, saveSettings, consent, upsertCheckout, syncShop, refresh, startCall,
-    stopContact, callContext, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmIdentity, outcome, dashboard };
+    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmIdentity, outcome, dashboard };

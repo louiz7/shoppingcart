@@ -68,7 +68,7 @@ function inWindow(policy, timezone, now) {
     return policy.weekdays.includes(day) && time >= policy.start && time < policy.end;
 }
 
-function eligibility({ shop, checkout, contact, attempts = [], active = false }, now = new Date(), action = 'call') {
+function eligibility({ shop, checkout, contact, attempts = [], active = false }, now = new Date(), action = 'call', ownerTest = false) {
     const p = rules(shop.rules);
     if (!shop.enabled || !shop.approved_at) return 'merchant_not_approved';
     if (checkout.completed_at || checkout.status === 'converted') return 'already_purchased';
@@ -78,11 +78,11 @@ function eligibility({ shop, checkout, contact, attempts = [], active = false },
     if (!checkout.phone || checkout.phone !== contact.phone) return 'consent_phone_mismatch';
     if (!contact.consent_checkout_id || contact.consent_checkout_id !== checkout.id) return 'consent_checkout_mismatch';
     if (!['EUR','USD'].includes(checkout.currency) || checkout.currency !== (shop.currency || 'EUR')) return 'unsupported_currency';
-    if (new Date(checkout.source_updated_at) > new Date(now - p.delayMinutes * 60000)) return 'abandonment_delay';
+    if (ownerTest!==true && new Date(checkout.source_updated_at) > new Date(now - p.delayMinutes * 60000)) return 'abandonment_delay';
     if (new Date(checkout.source_updated_at) < new Date(now - p.expiryDays * 86400000)) return 'checkout_expired';
     if (checkout.arm === 'control' || contact.arm === 'control') return 'control_group';
     if (action === 'call') {
-        if (!inWindow(p, contact.timezone, now)) return 'outside_call_window';
+        if (ownerTest!==true && !inWindow(p, contact.timezone, now)) return 'outside_call_window';
         if (active) return 'contact_busy';
         if (attempts.length >= p.maxAttempts) return 'attempt_limit';
         if (attempts.some((a) => new Date(a.created_at) > new Date(now - p.cooldownHours * 3600000))) return 'contact_cooldown';
