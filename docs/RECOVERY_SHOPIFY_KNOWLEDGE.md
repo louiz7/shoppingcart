@@ -35,6 +35,8 @@ Required scopes stay `read_orders,read_products,read_customers,write_discounts` 
 3. Reconnect through authenticated OAuth and have the merchant approve the new scopes. Publishing alone does not prove that the installed token has them.
 4. Verify granted scopes and real responses. Reconnection deliberately disables shop calling until settings are approved again.
 
+If Shopify returns only the basic scopes or an incomplete knowledge grant, the callback preserves the valid connection but returns `shopify_knowledge_scopes_missing`. The dashboard shows the missing-upgrade explanation instead of redirecting as if the upgrade succeeded. Publishing a version and completing OAuth are checked separately; a successful redirect alone is not evidence of new permissions.
+
 At implementation time the test shop had the four existing scopes. A real product query succeeded (one sample: 260 ms cold, under 1 ms warm); the sampled product had no public metafields. Policy/metaobject success paths were verified synthetically, not against a newly authorized live installation.
 
 ## Verification and limits

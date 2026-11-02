@@ -23,6 +23,7 @@ export const GET: RequestHandler = async ({ url, locals, fetch }) => {
 					unsupported_shop_currency: 'Dieser Pilot unterstützt EUR und USD. Die bestätigte Shopwährung muss zur hinterlegten Währung passen.',
 					shop_currency_changed: 'Die Shopwährung wurde geändert. Historische Beträge dürfen nicht als andere Währung umgedeutet werden. Bitte die bestehende Verbindung prüfen lassen.',
 					shopify_scopes_missing: 'Der Shopify-App fehlen benötigte Berechtigungen: read_orders, read_products, read_customers, write_discounts. Bitte in der aktiven App-Version ergänzen und neu verbinden.',
+					shopify_knowledge_scopes_missing: 'Die Basisverbindung besteht, aber Shopify hat die angeforderten Zusatzrechte noch nicht vollständig erteilt: read_legal_policies, read_metaobjects, read_metaobject_definitions. Bitte die aktive Version der tatsächlich verbundenen App im Shopify Dev Dashboard prüfen und danach erneut verbinden.',
 					shopify_token_exchange_failed: 'Shopify konnte den Anmeldecode nicht bestätigen. Bitte die Verbindung erneut über Shopify verbinden starten.',
 					invalid_oauth_state: 'Diese Shopify-Anmeldung wurde bereits verwendet oder ist abgelaufen. Bitte Shopify verbinden erneut starten.',
 					expired_oauth: 'Die Shopify-Anmeldung ist abgelaufen. Bitte Shopify verbinden erneut starten.',

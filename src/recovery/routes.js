@@ -80,6 +80,10 @@ oauthRouter.get('/callback', handle(async (req, res) => {
     } catch (error) {
         await db.query('UPDATE recovery_shops SET last_error=$2 WHERE id=$1', [savedShop.id, error.code || 'webhook_registration_failed']);
     }
+    // Keep the valid basic connection, but never report a requested scope upgrade as successful when it was not granted.
+    if (require('./knowledge').oauthScopes(shopDomain).some(scope=>!savedShop.scopes.includes(scope))) {
+        throw policy.problem('shopify_knowledge_scopes_missing',409);
+    }
     return res.redirect(303, new URL('/recovery', process.env.RECOVERY_DASHBOARD_URL || 'http://localhost:5173').href);
 }));
 
