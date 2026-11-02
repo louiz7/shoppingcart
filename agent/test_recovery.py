@@ -16,7 +16,24 @@ from livekit.plugins import openai
 AGENT_PATH = Path(__file__).with_name('recovery.py')
 
 
-class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
+class OfflineRecoveryCase(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # CI must exercise the same fixture as local runs, without reading .env or inheriting provider credentials.
+        environment = patch.dict(os.environ, {
+            'PATH': os.environ.get('PATH', os.defpath),
+            'PYTHON_DOTENV_DISABLED': '1',
+            'INTERNAL_TOOL_SECRET': 'synthetic-offline-internal-secret',
+            'TOOL_GATEWAY_URL': 'http://127.0.0.1:3110',
+            'LIVEKIT_AGENT_NAME': 'synthetic-recovery-worker',
+        }, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        dotenv = patch('dotenv.load_dotenv', return_value=False)
+        dotenv.start()
+        self.addCleanup(dotenv.stop)
+
+
+class RecoveryContracts(OfflineRecoveryCase):
     async def test_named_dispatch_and_all_tools_have_valid_sdk_schemas(self):
         registered = []
         original = AgentServer.rtc_session
@@ -58,7 +75,7 @@ class RecoveryContracts(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b'connected', stdout.lower())
 
 
-class WorkerLifecycle(unittest.IsolatedAsyncioTestCase):
+class WorkerLifecycle(OfflineRecoveryCase):
     async def asyncSetUp(self):
         spec = importlib.util.spec_from_file_location('recovery_lifecycle_test', AGENT_PATH)
         self.module = importlib.util.module_from_spec(spec)
@@ -171,7 +188,7 @@ class WorkerLifecycle(unittest.IsolatedAsyncioTestCase):
                 patch.object(self.module.openai.realtime, 'GPTLiveModel', return_value=object(),
                     side_effect=RuntimeError('synthetic model construction failure') if ctx.failure == 'model' else None), \
                 patch.object(self.module, 'AgentSession', return_value=session):
-            await self.module.entrypoint(ctx)
+            await asyncio.wait_for(self.module.entrypoint(ctx), 2)
 
     async def test_startup_failures_and_preanswer_hangup_always_attempt_backend_cleanup(self):
         for failure in ['connect', 'sip_timeout', 'context_transport', 'context_denied',
@@ -203,10 +220,14 @@ class WorkerLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_still_cleans_up_and_propagates(self):
         ctx, http, session = self.fixture(finish='stay_connected')
         task = asyncio.create_task(self.run_fixture(ctx, http, session))
-        await session.started.wait()
-        task.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await task
+        try:
+            await asyncio.wait_for(session.started.wait(), 1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         self.assertEqual(http.requests.count('end'), 1)
         self.assertIs(session.start_options['record'], False)
         self.assertEqual(session.close_calls, 1)
