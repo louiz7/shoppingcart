@@ -1,7 +1,7 @@
 'use strict';
 
 const policy = require('./policy');
-const DEFAULT = Object.freeze({ name: 'Rescova', persona: 'assistant', voice: 'male', language: 'de' });
+const DEFAULT = Object.freeze({ name: 'Rescova', persona: 'founder', voice: 'male', language: 'de' });
 
 function validate(input) {
     if (!input || typeof input!=='object' || Array.isArray(input) ||

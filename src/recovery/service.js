@@ -363,6 +363,7 @@ async function getOffer(call, percent, discountId) {
         const snapshot = ctx.checkout.snapshot;
         if (!snapshot.items?.length || snapshot.items.some((i) => !i.available || !i.variantId ||
             i.currentPriceCents !== i.originalUnitCents) || snapshot.discountCodes?.length) throw policy.problem('cart_offer_needs_review', 409);
+        if (percent && !approved && shop.mode === 'live') throw policy.problem('approved_discount_required',409);
         const amount = policy.offer(shop.rules, ctx.checkout.subtotal_cents, percent);
         if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
         const { rows } = await client.query(`SELECT * FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
@@ -372,9 +373,6 @@ async function getOffer(call, percent, discountId) {
                 rows[0].data.percent > policy.rules(shop.rules).maxDiscountPercent ||
                 (approved && (rows[0].data.discountId!==approved.id || rows[0].data.discountFingerprint!==approved.fingerprint))) throw policy.problem('offer_not_valid', 409);
             return { existing: true, data: rows[0].data };
-        }
-        if (percent && !approved && (await client.query('SELECT 1 FROM recovery_discounts WHERE shop_id=$1 LIMIT 1',[shop.id])).rowCount) {
-            throw policy.problem('approved_discount_required',409);
         }
         const code = approved?.code || (percent ? `RC${randomBytes(8).toString('hex').toUpperCase()}` : null);
         const expiresAt = new Date(Math.min(Date.now() + policy.rules(shop.rules).offerHours * 3600000,
@@ -390,7 +388,7 @@ async function getOffer(call, percent, discountId) {
     });
     if (reserved.existing) return reserved.data;
     try {
-        const authorized = await transaction(async (client) => {
+        await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
             const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
@@ -398,11 +396,7 @@ async function getOffer(call, percent, discountId) {
             policy.offer(shop.rules, ctx.checkout.subtotal_cents, reserved.data.percent);
             if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
             if (reserved.data.cartHash !== policy.cartHash(ctx.checkout.snapshot)) throw policy.problem('cart_changed', 409);
-            return { shop, snapshot: ctx.checkout.snapshot };
         });
-        if (reserved.data.percent && !approved && authorized.shop.mode === 'live') {
-            await shopify.createDiscount(authorized.shop, authorized.snapshot, reserved.data.code, reserved.data.percent, reserved.data.expiresAt);
-        }
         return await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
@@ -451,6 +445,7 @@ async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount
         !Number.isFinite(+new Date(offer.expiresAt)) ||
         new Date(offer.expiresAt) <= new Date() || offer.cartHash !== policy.cartHash(ctx.checkout.snapshot) ||
         offer.currency !== ctx.checkout.currency || offer.percent > policy.rules(shop.rules).maxDiscountPercent) throw policy.problem('valid_offer_required', 409);
+    if (shop.mode === 'live' && !offer.discountId) throw policy.problem('approved_discount_required',409);
     policy.offer(shop.rules, ctx.checkout.subtotal_cents, offer.percent);
     if (offer.discountId) {
         await discounts.assertApproved(client,shop,discountProof,ctx.checkout.subtotal_cents);

@@ -33,8 +33,8 @@ function validate(shop, input) {
         typeof input.code !== 'string' || !/^[A-Z0-9_-]{3,32}$/.test(input.code) ||
         !Number.isInteger(input.percent) || input.percent<1 || input.percent>rules.maxDiscountPercent ||
         !Number.isSafeInteger(input.minSubtotalCents) || input.minSubtotalCents<rules.minSubtotalCents || input.minSubtotalCents>2147483647 ||
-        !Number.isInteger(input.validDays) || input.validDays<1 || input.validDays>30 ||
-        !Number.isInteger(input.usageLimit) || input.usageLimit<1 || input.usageLimit>1000) throw policy.problem('invalid_discount_rules', 409);
+        !Number.isInteger(input.validDays) || input.validDays<1 || !(new Date(Date.now()+input.validDays*86400000).getUTCFullYear()<=9999) ||
+        !Number.isInteger(input.usageLimit) || input.usageLimit<1 || input.usageLimit>2147483647) throw policy.problem('invalid_discount_rules', 409);
     return { ...input, title: input.title.trim() };
 }
 
@@ -57,8 +57,9 @@ function matches(shop, row, node) {
         actual.customerGets?.items?.__typename!=='AllDiscountItems' || actual.customerGets.items.allItems!==true ||
         actual.combinesWith?.orderDiscounts!==false || actual.combinesWith?.productDiscounts!==false || actual.combinesWith?.shippingDiscounts!==false ||
         (actual.combinesWith.productDiscountsWithTagsOnSameCartLine || []).length ||
-        actual.codes?.pageInfo?.hasNextPage!==false || !Array.isArray(actual.codes.nodes) || actual.codes.nodes.length!==1 || actual.codes.nodes[0].code!==row.code ||
-        minimum?.__typename!=='DiscountMinimumSubtotal' || minimum.greaterThanOrEqualToSubtotal?.currencyCode!==shop.currency) return false;
+        actual.codes?.pageInfo?.hasNextPage!==false || !Array.isArray(actual.codes.nodes) || actual.codes.nodes.length!==1 || actual.codes.nodes[0].code!==row.code) return false;
+    if (minimum===null) return row.min_subtotal_cents===0;
+    if (minimum?.__typename!=='DiscountMinimumSubtotal' || minimum.greaterThanOrEqualToSubtotal?.currencyCode!==shop.currency) return false;
     try { return policy.cents(minimum.greaterThanOrEqualToSubtotal.amount)===row.min_subtotal_cents; }
     catch { return false; }
 }
@@ -110,7 +111,7 @@ async function create(customerId, shopId, input) {
             discountCodeBasicCreate(basicCodeDiscount:$input) { codeDiscountNode { id } userErrors { field code message } }
         }`, { input: { title: row.title,code: row.code,startsAt: new Date().toISOString(),endsAt: new Date(row.expires_at).toISOString(),
             context: { all: 'ALL' }, customerGets: { value: { percentage: row.percent/100 }, items: { all: true } },
-            minimumRequirement: { subtotal: { greaterThanOrEqualToSubtotal: (row.min_subtotal_cents/100).toFixed(2) } },
+            ...(row.min_subtotal_cents>0 ? { minimumRequirement: { subtotal: { greaterThanOrEqualToSubtotal: (row.min_subtotal_cents/100).toFixed(2) } } } : {}),
             usageLimit: row.usage_limit,appliesOncePerCustomer: true,
             combinesWith: { orderDiscounts: false,productDiscounts: false,shippingDiscounts: false } } });
         const result = response.discountCodeBasicCreate;

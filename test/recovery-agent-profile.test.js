@@ -21,6 +21,7 @@ test('agent profile allows bounded names and fixed choices with explicit AI temp
         if (persona==='founder') assert.match(result.greeting,language==='de' ? /vom Gründerteam/ : /from the founding team/);
     }
     assert.equal(profile.forShop({ brand: 'Synthetic shop' }).voice,'male');
+    assert.equal(profile.forShop({ brand: 'Synthetic shop' }).persona,'founder');
 });
 
 test('agent profiles persist only for a shop owner admin and stay isolated by tenant', {
@@ -56,7 +57,7 @@ test('agent profiles persist only for a shop owner admin and stay isolated by te
     const saved = await service.updateAgentProfile(f.customerId,f.shopId,value,f.userId);
     assert.deepEqual(saved.agentProfile,profile.forShop({ brand: 'Synthetic shop',agent_profile: value }));
     assert.deepEqual((await discounts.settings(f.customerId)).shops[0].agentProfile,saved.agentProfile);
-    assert.equal((await discounts.settings(other.customerId)).shops[0].agentProfile.persona,'assistant');
+    assert.equal((await discounts.settings(other.customerId)).shops[0].agentProfile.persona,'founder');
     await assert.rejects(db.query(`UPDATE recovery_shops SET agent_profile=jsonb_set(agent_profile,'{persona}','null') WHERE id=$1`,[f.shopId]),
         (error) => error.code==='23514');
     for (const change of ["role='viewer'","role='admin',active=FALSE"]) {

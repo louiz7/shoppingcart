@@ -116,9 +116,12 @@ test('integer money and discount ceilings cannot be changed by a model request',
     assert.equal(p.cents('0.01'), 1);
     for (const invalid of ['1e9', '-5', 'NaN', '1.001', '12,00']) assert.throws(() => p.cents(invalid));
     assert.equal(p.offer({}, 11800, 10).merchandiseTotalCents, 10620);
-    assert.throws(() => p.offer({}, 11800, 11), /discount_denied/);
+    assert.equal(p.offer({}, 100, 10).merchandiseTotalCents, 90);
+    assert.equal(p.offer({}, 100, 100).merchandiseTotalCents, 0);
+    assert.throws(() => p.offer({}, 100, 101), /discount_denied/);
+    assert.throws(() => p.offer({ maxDiscountPercent: 10 }, 11800, 11), /discount_denied/);
     assert.throws(() => p.offer({}, 11800, 9.9), /discount_denied/);
-    assert.throws(() => p.offer({}, 100, 10), /minimum_subtotal/);
+    assert.throws(() => p.offer({ minSubtotalCents: 5000 }, 100, 10), /minimum_subtotal/);
     assert.throws(() => p.rules({ maxAttempts: 100 }), /invalid_maxAttempts/);
     assert.throws(() => p.rules(JSON.parse('{"__proto__":{"enabled":true}}')), /unknown_rule/);
 });

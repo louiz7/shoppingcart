@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { untrack, tick } from 'svelte';
 	import { enhance } from '$app/forms';
 	import RecoveryShell from '$lib/components/RecoveryShell.svelte';
 	import RecoveryJourney from '$lib/components/RecoveryJourney.svelte';
@@ -11,7 +11,7 @@
 	let selectedShop = $state(untrack(() => form?.values?.shopId || agentFeedback?.agentValues?.shopId || data.settings?.shops?.[0]?.id || ''));
 	const shop = $derived(shops.find((item: any) => item.id === selectedShop) || shops[0]);
 	let agentName = $state(untrack(() => agentFeedback?.agentValues?.name ?? data.settings?.shops?.[0]?.agentProfile?.name ?? 'Rescova'));
-	let agentPersona = $state(untrack(() => agentFeedback?.agentValues?.persona ?? data.settings?.shops?.[0]?.agentProfile?.persona ?? 'assistant'));
+	let agentPersona = $state(untrack(() => agentFeedback?.agentValues?.persona ?? data.settings?.shops?.[0]?.agentProfile?.persona ?? 'founder'));
 	let agentVoice = $state(untrack(() => agentFeedback?.agentValues?.voice ?? data.settings?.shops?.[0]?.agentProfile?.voice ?? 'male'));
 	let agentLanguage = $state(untrack(() => agentFeedback?.agentValues?.language ?? data.settings?.shops?.[0]?.agentProfile?.language ?? 'de'));
 	let agentSubmitting = $state(false);
@@ -40,7 +40,7 @@
 		percent = Math.min(current?.maxDiscountPercent || 10, 10);
 		requestId = crypto.randomUUID();
 		agentName = current?.agentProfile?.name ?? 'Rescova';
-		agentPersona = current?.agentProfile?.persona ?? 'assistant';
+		agentPersona = current?.agentProfile?.persona ?? 'founder';
 		agentVoice = current?.agentProfile?.voice ?? 'male';
 		agentLanguage = current?.agentProfile?.language ?? 'de';
 		agentTransportError = '';
@@ -91,7 +91,8 @@
 			<div class="section-copy">
 				<h2 id="discount-heading">Rabattcode anlegen</h2>
 				<p>Lege ein Angebot direkt in Shopify an. Dein Agent kann es nach Prüfung der Shop-Regeln im Gespräch anbieten.</p>
-				<p class="limits">Erlaubt sind bis zu {shop.maxDiscountPercent} % Rabatt ab {money(shop.minSubtotalCents)} Warenwert.</p>
+				<p class="limits">Du bestimmst Rabatt, Mindestbestellwert, Laufzeit und Einlösungen. 0 bedeutet keinen Mindestbestellwert.</p>
+				{#if shop.maxDiscountPercent < 100 || shop.minSubtotalCents > 0}<p class="limits">Gespeicherte Shop-Grenzen: bis zu {shop.maxDiscountPercent} % Rabatt ab {money(shop.minSubtotalCents)} Warenwert.</p>{/if}
 				<div class="preview" aria-label="Vorschau des Rabattentwurfs">
 					<span class="preview-label">Dein Angebot · Entwurf</span>
 					<p class="preview-offer">{percent ?? '—'}<span>% Rabatt</span></p>
@@ -111,7 +112,11 @@
 								if (result.type === 'success') { title = ''; code = ''; requestId = crypto.randomUUID(); }
 								else if (result.type === 'failure' && form?.values?.requestId) requestId = form.values.requestId;
 							}
-						} finally { submitting = false; }
+						} finally {
+							submitting = false;
+							await tick();
+							document.getElementById('discount-feedback')?.focus();
+						}
 					};
 				}}>
 				{#if shops.length <= 1}<input type="hidden" name="shopId" value={shop.id} />{/if}
@@ -126,14 +131,14 @@
 						<div class="field"><label for="minimum">Mindestbestellwert ({shop.currency})</label><input id="minimum" name="minSubtotal" inputmode="decimal" pattern={'[0-9]+([,.][0-9]{1,2})?'} bind:value={minimum} required /></div>
 					</div>
 					<div class="field-pair">
-						<div class="field"><label for="days">Gültigkeit in Tagen</label><input id="days" type="number" name="validDays" min="1" max="30" step="1" bind:value={validDays} required /></div>
-						<div class="field"><label for="usage">Maximale Einlösungen</label><input id="usage" type="number" name="usageLimit" min="1" max="1000" step="1" bind:value={usageLimit} required /></div>
+						<div class="field"><label for="days">Gültigkeit in Tagen</label><input id="days" type="number" name="validDays" min="1" step="1" bind:value={validDays} required /></div>
+						<div class="field"><label for="usage">Maximale Einlösungen</label><input id="usage" type="number" name="usageLimit" min="1" max="2147483647" step="1" bind:value={usageLimit} required /></div>
 					</div>
 					<div class="form-footer"><p>Der Code wird in deinem Shopify-Shop erstellt.</p><button class="primary" type="submit">{submitting ? 'Wird in Shopify angelegt …' : 'In Shopify anlegen'}</button></div>
 				</fieldset>
 				{#if !data.canEdit}<p class="form-message">Nur Händler-Admins können Rabattcodes anlegen.</p>{/if}
-				{#if form?.success}<p class="form-message success" role="status">{form.success}</p>{/if}
-				{#if form?.error || submitError || discountUncertain}<div class="form-message" role="alert"><p>{submitError || form?.error || 'Die Erstellung ist noch nicht bestätigt. Bitte prüfe den aktuellen Status.'}</p>{#if form?.uncertain || submitError || discountUncertain}<a href="/recovery/settings">Status aktualisieren</a>{/if}</div>{/if}
+				{#if form?.success && !form?.error && !submitError && !discountUncertain}<p id="discount-feedback" tabindex="-1" class="form-message success" role="status">{form.success}</p>{/if}
+				{#if form?.error || submitError || discountUncertain}<div id="discount-feedback" tabindex="-1" class="form-message" role="alert"><p>{submitError || form?.error || 'Die Erstellung ist noch nicht bestätigt. Bitte prüfe den aktuellen Status.'}</p>{#if form?.uncertain || submitError || discountUncertain}<a href="/recovery/settings">Status aktualisieren</a>{/if}</div>{/if}
 			</form>
 		</section>
 		<section class="settings-row catalogue-row" aria-labelledby="catalogue-heading">

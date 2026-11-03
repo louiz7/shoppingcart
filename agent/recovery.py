@@ -167,8 +167,8 @@ def gateway_url() -> str:
 def profile_options(initial: dict) -> dict:
     profile = initial.get('agentProfile')
     if profile is None:
-        profile = {'name': 'Rescova', 'persona': 'assistant', 'voice': 'male', 'language': 'de',
-            'greeting': f"Hey, hier ist Rescova, die KI-Assistenz von {initial['brand']}. Du hattest etwas bei uns im Warenkorb. Ist noch eine Frage zu den Produkten offen, bei der ich helfen kann?"}
+        profile = {'name': 'Rescova', 'persona': 'founder', 'voice': 'male', 'language': 'de',
+            'greeting': f"Hey, hier ist Rescova, die KI-Assistenz vom Gründerteam von {initial['brand']}. Du hattest etwas bei uns im Warenkorb. Ist noch eine Frage zu den Produkten offen, bei der ich helfen kann?"}
     if (not isinstance(profile, dict) or profile.get('persona') not in ('founder', 'assistant')
             or profile.get('voice') not in ('male', 'female') or profile.get('language') not in ('de', 'en')
             or not isinstance(profile.get('name'), str) or not 1 <= len(profile['name']) <= 40

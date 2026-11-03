@@ -39,8 +39,8 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
                 codes: { nodes: [{ code: value.code }],pageInfo: { hasNextPage: false } },context: { __typename: 'DiscountBuyerSelectionAll' },
                 customerGets: { value: { __typename: 'DiscountPercentage',percentage: value.customerGets.value.percentage },
                     items: { __typename: 'AllDiscountItems',allItems: true } },
-                minimumRequirement: { __typename: 'DiscountMinimumSubtotal',greaterThanOrEqualToSubtotal: {
-                    amount: value.minimumRequirement.subtotal.greaterThanOrEqualToSubtotal,currencyCode: shop.currency } },
+                minimumRequirement: value.minimumRequirement ? { __typename: 'DiscountMinimumSubtotal',greaterThanOrEqualToSubtotal: {
+                    amount: value.minimumRequirement.subtotal.greaterThanOrEqualToSubtotal,currencyCode: shop.currency } } : null,
                 combinesWith: { ...value.combinesWith,productDiscountsWithTagsOnSameCartLine: [] } } };
             remote.set(id,{ shopId: shop.id,node });
             return { discountCodeBasicCreate: { codeDiscountNode: { id },userErrors: [] } };
@@ -87,13 +87,50 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
 
     await t.test('merchant validation and tenant isolation reject requests before Shopify is called',async () => {
         const f = await fixture(),other = await fixture(),before = mutationCount;
-        for (const change of [{percent: 11},{percent: 0},{code: 'lowercase'},{title: ''},{minSubtotalCents: 4999},
-            {usageLimit: 1001},{validDays: 31},{requestId: 'bad'},{unexpected: true}]) {
+        for (const change of [{percent: 101},{percent: 0},{code: 'lowercase'},{title: ''},{minSubtotalCents: -1},
+            {usageLimit: 2147483648},{usageLimit: 0},{validDays: 0},{validDays: 0.5},{validDays: 2147483647},{requestId: 'bad'},{unexpected: true}]) {
             await assert.rejects(discounts.create(f.customerId,f.shopId,{ ...f.input,...change }),/invalid_discount_rules/);
         }
         await assert.rejects(discounts.create(other.customerId,f.shopId,f.input),/shop_not_found/);
         assert.equal(mutationCount,before);
         assert.deepEqual((await discounts.settings(other.customerId)).shops[0].discounts,[]);
+    });
+    await t.test('zero minimum creates EXTRA10 without a Shopify minimum and is usable below 50',async () => {
+        const f = await fixture();
+        await db.query('UPDATE recovery_shops SET rules=$2 WHERE id=$1',[f.shopId,{}]);
+        f.shop.rules = {};
+        const input = { ...f.input,title: 'Black Month',code: 'EXTRA10',minSubtotalCents: 0 };
+        const approved = (await discounts.create(f.customerId,f.shopId,input)).discount;
+        assert.equal(approved.status,'confirmed'); assert.equal(approved.minSubtotalCents,0);
+        const mutation = graphql.mock.calls.find(c => c.arguments[2]?.input?.code === 'EXTRA10');
+        assert.equal(Object.hasOwn(mutation.arguments[2].input,'minimumRequirement'),false);
+        assert.equal((await discounts.verify(f.shop,approved.id,100)).code,'EXTRA10');
+        assert.deepEqual((await discounts.available(f.shop,100)).map(d=>d.id),[approved.id]);
+        assert.equal((await discounts.settings(f.customerId)).shops[0].discounts[0].code,'EXTRA10');
+        const call = await caller(f);
+        const offer = await service.getOffer(call,0,approved.id);
+        assert.equal(offer.percent,10);
+        const row = (await db.query('SELECT * FROM recovery_discounts WHERE id=$1',[approved.id])).rows[0];
+        const actual = remote.get(row.shopify_id).node.codeDiscount;
+        for (const minimum of [undefined,{__typename:'DiscountMinimumQuantity'},
+            {__typename:'DiscountMinimumSubtotal',greaterThanOrEqualToSubtotal:{amount:'1.00',currencyCode:'USD'}}]) {
+            actual.minimumRequirement = minimum;
+            await assert.rejects(discounts.verify(f.shop,approved.id,10000),/discount_not_available/);
+        }
+        actual.minimumRequirement = {__typename:'DiscountMinimumSubtotal',greaterThanOrEqualToSubtotal:{amount:'0.00',currencyCode:'USD'}};
+        assert.equal((await discounts.verify(f.shop,approved.id,100)).code,'EXTRA10');
+    });
+    await t.test('merchant terms can exceed old defaults while explicit shop limits remain binding',async () => {
+        const f = await fixture();
+        const approved = (await discounts.create(f.customerId,f.shopId,{...f.input,percent:40,minSubtotalCents:0,validDays:365,usageLimit:5000})).discount;
+        assert.equal(approved.percent,40); assert.equal(approved.usageLimit,5000);
+        assert.equal((await discounts.verify(f.shop,approved.id,100)).percent,40);
+        const before = mutationCount;
+        await db.query('UPDATE recovery_shops SET rules=$2 WHERE id=$1',[f.shopId,{maxDiscountPercent:10,minSubtotalCents:5000}]);
+        for (const change of [{percent:11},{minSubtotalCents:0}]) {
+            await assert.rejects(discounts.create(f.customerId,f.shopId,{...f.input,requestId:randomUUID(),...change}),/invalid_discount_rules/);
+        }
+        assert.equal(mutationCount,before);
     });
     await t.test('concurrent approvals create one global percentage code and replays cannot change it',async () => {
         const f = await fixture(),before = mutationCount;
@@ -187,6 +224,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
             (d) => { d.codes.nodes[0].code='CHANGED'; },(d) => { d.asyncUsageCount=d.usageLimit; },
             (d) => { d.combinesWith.orderDiscounts=true; },(d) => { d.appliesOncePerCustomer=false; },
             (d) => { d.minimumRequirement.greaterThanOrEqualToSubtotal.amount='99.00'; },
+            (d) => { d.minimumRequirement=null; },
             (d) => { d.endsAt=new Date(Date.now()-1000).toISOString(); },(d) => { d.context.__typename='DiscountCustomers'; },
         ]) {
             data.node=structuredClone(original); change(data.node.codeDiscount);
@@ -215,6 +253,47 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         } finally { readHook=null; release(); }
         await assert.rejects(pending,/contact_stopped|consent_missing/);
     });
+    await t.test('SMS authorization is rechecked after reservation and before any provider dispatch', async () => {
+        const changes = [
+            { sql: `UPDATE recovery_actions SET data=jsonb_set(data,'{expiresAt}',to_jsonb((NOW()-INTERVAL '1 second')::text))
+                WHERE checkout_id=NEW.checkout_id AND kind='offer';`, error: /valid_offer_required/ },
+            { sql: `UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{items,0,quantity}','2')
+                WHERE id=NEW.checkout_id;`, error: /valid_offer_required/ },
+            { sql: `UPDATE recovery_actions SET data=jsonb_set(data,'{checkoutUrl}',to_jsonb((data->>'checkoutUrl')||'&changed=1'))
+                WHERE checkout_id=NEW.checkout_id AND kind='offer';`, error: /sms_authorization_changed/ },
+            { sql: `INSERT INTO recovery_events(id,shop_id,call_id,kind,data,created_at)
+                SELECT gen_random_uuid(),shop_id,id,'user_transcript',
+                    jsonb_build_object('text','Bitte keine SMS senden.','eventId',gen_random_uuid()),clock_timestamp()
+                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /conversation_changed/ },
+            { sql: `INSERT INTO recovery_events(id,shop_id,call_id,kind,data,created_at)
+                SELECT gen_random_uuid(),shop_id,id,'user_transcript',
+                    jsonb_build_object('text','Bitte senden Sie mir den Link per SMS, aber ohne Rabatt.','eventId',gen_random_uuid()),clock_timestamp()
+                FROM recovery_calls WHERE checkout_id=NEW.checkout_id;`, error: /conversation_changed/ },
+        ];
+        for (const change of changes) {
+            const f = await fixture(),approved=(await discounts.create(f.customerId,f.shopId,f.input)).discount,call=await caller(f);
+            const checkoutId=call.checkout_id;
+            await service.getOffer(call,0,approved.id);
+            await service.recordTranscript(call, { role: 'assistant', eventId: randomUUID(), text: 'Bist du mit 10 Prozent Rabatt einverstanden?' });
+            await service.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Ja, gerne.' });
+            await service.recordTranscript(call, { role: 'user', eventId: randomUUID(), text: 'Bitte senden Sie mir den Link per SMS.' });
+            const name = `recovery_sms_test_${randomUUID().replaceAll('-', '')}`;
+            // Inject a change at the reservation boundary without contacting external providers.
+            await db.query(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+                ${change.sql} RETURN NEW; END $$`);
+            try {
+                await db.query(`CREATE TRIGGER ${name} AFTER INSERT ON recovery_actions FOR EACH ROW
+                    WHEN (NEW.kind='sms' AND NEW.checkout_id='${checkoutId}') EXECUTE FUNCTION ${name}()`);
+                const before = sms.mock.calls.length;
+                await assert.rejects(sendLink(call, true), change.error);
+                assert.equal(sms.mock.calls.length, before);
+                assert.equal((await db.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`, [checkoutId])).rows[0].status, 'failed');
+                assert.deepEqual(await sendLink(call, true), { status: 'failed', duplicate: true });
+                assert.equal(sms.mock.calls.length, before);
+            } finally { await db.query(`DROP FUNCTION ${name}() CASCADE`); }
+        }
+    });
+
     await t.test('a code deactivated after SMS reservation fails before dispatch and is never resent',async () => {
         const f = await fixture(),approved = (await discounts.create(f.customerId,f.shopId,f.input)).discount,call = await caller(f);
         await service.getOffer(call,0,approved.id);

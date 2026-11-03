@@ -101,7 +101,7 @@
 { key:'maxAttempts', label:'Maximale Versuche pro Kontakt', min:1, max:3 },
 { key:'cooldownHours', label:'Abstand zwischen Versuchen (Stunden)', min:24, max:168 },
 { key:'expiryDays', label:'Warenkorb höchstens so alt (Tage)', min:1, max:14 },
-{ key:'maxDiscountPercent', label:'Maximal erlaubter Rabatt (%)', min:0, max:30 },
+{ key:'maxDiscountPercent', label:'Maximal erlaubter Rabatt (%)', min:0, max:100 },
 { key:'minSubtotalCents', label:'Mindestwarenwert für Rabatt (Cent)', min:0, max:10000000 },
 { key:'offerHours', label:'Angebotsgültigkeit (Stunden)', min:1, max:72 },
 { key:'holdoutPercent', label:'Kontrollgruppe (%)', min:10, max:50 },

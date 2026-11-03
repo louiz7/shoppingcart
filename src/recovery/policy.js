@@ -5,7 +5,7 @@ const { createHash } = require('node:crypto');
 const DEFAULT_RULES = Object.freeze({
     timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5], start: '10:00', end: '18:00',
     delayMinutes: 60, maxAttempts: 2, cooldownHours: 24, expiryDays: 7,
-    holdoutPercent: 20, maxDiscountPercent: 10, minSubtotalCents: 5000,
+    holdoutPercent: 20, maxDiscountPercent: 100, minSubtotalCents: 0,
     offerHours: 24, contributionPercent: 40, voiceCentsPerMinute: 20,
 });
 
@@ -18,7 +18,7 @@ function rules(value = {}) {
     if (Object.keys(value).some((key) => !Object.hasOwn(DEFAULT_RULES, key))) throw problem('unknown_rule');
     for (const [key, min, max] of [
         ['delayMinutes', 30, 1440], ['maxAttempts', 1, 3], ['cooldownHours', 24, 168],
-        ['expiryDays', 1, 14], ['holdoutPercent', 10, 50], ['maxDiscountPercent', 0, 30],
+        ['expiryDays', 1, 14], ['holdoutPercent', 10, 50], ['maxDiscountPercent', 0, 100],
         ['minSubtotalCents', 0, 10000000], ['offerHours', 1, 72],
         ['contributionPercent', 0, 100], ['voiceCentsPerMinute', 0, 10000],
     ]) {

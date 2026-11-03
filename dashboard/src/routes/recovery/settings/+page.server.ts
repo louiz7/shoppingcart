@@ -71,8 +71,8 @@ export const actions: Actions = {
 		if (!uuid.test(values.shopId) || !uuid.test(values.requestId) || !values.title || values.title.length > 80 ||
 			!(/^[A-Z0-9_-]{3,32}$/).test(values.code) || !Number.isInteger(percent) || percent < 1 || percent > 100 ||
 			!Number.isSafeInteger(minSubtotalCents) || minSubtotalCents > 2147483647 ||
-			!Number.isInteger(validDays) || validDays < 1 || validDays > 30 ||
-			!Number.isInteger(usageLimit) || usageLimit < 1 || usageLimit > 1000) {
+			!Number.isInteger(validDays) || validDays < 1 || !(new Date(Date.now() + validDays * 86400000).getUTCFullYear() <= 9999) ||
+			!Number.isInteger(usageLimit) || usageLimit < 1 || usageLimit > 2147483647) {
 			return fail(400, { error: 'Bitte prüfe die Felder und die angegebenen Grenzen.', values, uncertain: false });
 		}
 		try {
@@ -89,7 +89,7 @@ export const actions: Actions = {
 			const messages: Record<string, string> = {
 				discount_denied: 'Der Rabatt überschreitet die erlaubten Shop-Regeln.',
 				invalid_discount: 'Bitte prüfe die Rabattangaben und die Shop-Regeln.',
-				invalid_discount_rules: 'Bitte halte die Rabattgrenze und den Mindestbestellwert deines Shops ein.',
+				invalid_discount_rules: 'Bitte prüfe die Rabattangaben und gegebenenfalls die ausdrücklich gespeicherten Shop-Grenzen.',
 				discount_request_reused: 'Diese Anfrage gehört bereits zu einem anderen Entwurf. Lade die Einstellungen neu.',
 				live_shop_required: 'Rabattcodes können nur für einen verbundenen Shopify-Shop angelegt werden.',
 				discount_creation_rejected: 'Shopify hat diesen Rabattcode nicht angelegt. Bitte prüfe deine Angaben und den Code.',
