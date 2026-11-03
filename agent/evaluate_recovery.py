@@ -60,12 +60,21 @@ CASES = [
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--low-reasoning', action='store_true', help='Compare with low reasoning effort')
+    parser.add_argument('--browser-demo', action='store_true', help='Evaluate browser link and refusal behavior without sending SMS')
     args = parser.parse_args()
-    options = backend_options()
+    options = backend_options(demo=args.browser_demo)
     if args.low_reasoning:
         options['reasoning'] = {'effort':'low'}
+    cases = CASES
+    if args.browser_demo:
+        cases = [
+            ('browser_link',False,[('user','Ich würde es doch nehmen. Zeig mir bitte den Checkout hier im Browser.')],'send_checkout_link',False),
+            ('browser_discount',True,[('assistant','Mit zehn Prozent Rabatt kostet es 90 Euro. Soll ich dir den Link damit hier anzeigen?'),('user','Genau so machen wir das.')],'send_checkout_link',True),
+            ('browser_no_discount',True,[('assistant','Möchtest du den Zehn-Prozent-Rabatt?'),('user','Nein danke, zeig mir einfach den normalen Link hier.')],'send_checkout_link',False),
+            ('browser_stop',False,[('user','Ich möchte nicht weiter sprechen, bitte keine Nachrichten mehr.')],'stop_contact',None),
+        ]
     timings = []
-    agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None)
+    agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None, demo=args.browser_demo)
     schemas = []
     for tool in agent.tools:
         schemas.append({'type':'function', 'name':tool.info.name, 'description':tool.info.description,
@@ -130,7 +139,7 @@ async def main():
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
                 'ms':elapsed, **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_')) else {})}),flush=True)
             return passed
-        results = await asyncio.gather(*(check(case) for case in CASES))
+        results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
         'p50Ms':median(timings), 'maxMs':max(timings)}))
     if not all(results):

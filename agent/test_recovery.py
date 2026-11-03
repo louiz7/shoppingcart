@@ -25,6 +25,7 @@ class OfflineRecoveryCase(unittest.IsolatedAsyncioTestCase):
             'INTERNAL_TOOL_SECRET': 'synthetic-offline-internal-secret',
             'TOOL_GATEWAY_URL': 'http://127.0.0.1:3110',
             'LIVEKIT_AGENT_NAME': 'synthetic-recovery-worker',
+            'RECOVERY_LIVE_ENABLED': '1',
         }, clear=True)
         environment.start()
         self.addCleanup(environment.stop)
@@ -154,6 +155,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
             def post(self, url, **kwargs):
                 name = url.rsplit('/', 1)[-1]
                 self.requests.append(name)
+                self.urls = getattr(self, 'urls', []) + [url]
                 self.payloads.append((name, kwargs.get('json')))
                 if failure == 'context_transport' and name == 'connected':
                     raise module.aiohttp.ClientConnectionError('synthetic offline gateway')
@@ -252,6 +254,23 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 with self.assertRaisesRegex(ValueError,'invalid_agent_profile'):
                     self.module.profile_options({'agentProfile':{**profile,**change}})
 
+    async def test_browser_demo_uses_same_agent_but_isolated_transport_and_tools(self):
+        ctx, http, session = self.fixture(finish='conversation_items')
+        ctx.job.room.metadata = json.dumps({'mode':'recovery_demo','call_token':'a'*64})
+        with patch.dict(os.environ, {'RECOVERY_LIVE_ENABLED':'0','RECOVERY_BROWSER_DEMO_ENABLED':'1'}):
+            await self.run_fixture(ctx,http,session)
+        ctx.wait_for_participant.assert_awaited_once_with(identity='demo-visitor')
+        self.assertTrue(session.start_options['agent'].demo)
+        self.assertTrue(all('/internal/recovery/demo/tools/' in url for url in http.urls))
+        self.assertEqual(http.requests.count('end'),1)
+
+    async def test_demo_enabled_does_not_enable_phone_jobs(self):
+        ctx,http,session=self.fixture()
+        with patch.dict(os.environ, {'RECOVERY_LIVE_ENABLED':'0','RECOVERY_BROWSER_DEMO_ENABLED':'1'}):
+            await self.run_fixture(ctx,http,session)
+        ctx.connect.assert_not_awaited()
+        ctx.shutdown.assert_called_once_with(reason='recovery_mode_disabled')
+
     async def test_explicit_openai_endpoint_is_preserved(self):
         with patch.dict(os.environ, {'OPENAI_BASE_URL': 'https://us.api.openai.com/v1'}):
             await self.run_fixture(*self.fixture())
@@ -325,7 +344,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
         started, release = asyncio.Event(), asyncio.Event()
         writes = []
 
-        async def backend(http, token, name, data=None):
+        async def backend(http, token, name, data=None, demo=False):
             if name == 'transcript' and not started.is_set():
                 started.set()
                 await release.wait()

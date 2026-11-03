@@ -6,6 +6,13 @@ const PUBLIC_PATHS = new Set(['/login', '/register']);
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const path = event.url.pathname;
+	if (['/demo', '/demo/session'].includes(path)) {
+		event.locals.user = null;
+		const response = await resolve(event);
+		response.headers.set('Cache-Control', 'no-store');
+		response.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+		return response;
+	}
 	if ((event.request.method === 'GET' || event.request.method === 'HEAD') &&
 		(path.startsWith('/_app/') || path.startsWith('/figma/') || ['/favicon.ico','/robots.txt'].includes(path))) return resolve(event);
 	if (env.RECOVERY_ONLY === '1' && path !== '/' && !PUBLIC_PATHS.has(path) && path !== '/logout' &&
