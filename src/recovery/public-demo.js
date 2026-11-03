@@ -39,7 +39,12 @@ async function source() {
         if (!checkout || checkout.lineItems.pageInfo.hasNextPage) throw policy.problem('demo_cart_unavailable',503);
         const cart=await catalog.snapshot(shop,checkout.lineItems.nodes.map(i=>({variantId:i.variant?.id,quantity:i.quantity})));
         const [details,availableDiscounts]=await Promise.all([knowledge.forCart(shop,cart.items,true),discounts.available(shop,cart.subtotalCents)]);
-        return {shop,context:{brand:shop.brand,brandVoice:shop.brand_voice,agentProfile:require('./agent-profile').forShop(shop),
+        const agentProfile=require('./agent-profile').forShop(shop);
+        // Founder roleplay is confined to the explicitly labelled AI browser demo.
+        if(agentProfile.persona==='founder') agentProfile.greeting=agentProfile.language==='de'
+            ? `Hey, hier ist ${agentProfile.name}, Gründer von ${shop.brand}. Ich hab gesehen, dass du gerade bei uns im Shop unterwegs warst. Hast du noch Fragen zu den Produkten, bei denen ich dir helfen kann?`
+            : `Hey, I'm ${agentProfile.name}, founder of ${shop.brand}. I saw you were just browsing our store. Do you have any questions about the products I can help with?`;
+        return {shop,context:{brand:shop.brand,brandVoice:shop.brand_voice,agentProfile,
             contactConfirmed:false,cart,knowledge:details,availableDiscounts,maxDiscountPercent:policy.rules(shop.rules).maxDiscountPercent,
             verifiedAt:new Date().toISOString(),demo:true}};
     })().catch(error=>{if(cachedSource===entry) cachedSource=null;throw error;});

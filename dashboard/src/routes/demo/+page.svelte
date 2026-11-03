@@ -68,13 +68,13 @@
 <svelte:head><title>Rescova · Agent ausprobieren</title><meta name="robots" content="noindex,nofollow" /><meta name="description" content="Sprich mit dem aktuellen Rescova-Agenten über einen echten Testwarenkorb." /></svelte:head>
 <main class="demo-page">
     <header><a class="wordmark" href="/demo" aria-label="Rescova Demo">rescova<span>.</span></a><a class="login" href="/login">Zum Dashboard <span aria-hidden="true">↗</span></a></header>
-    <div class="intro"><div><p class="eyebrow">Rescova / Browserdemo</p><h1>Ausprobieren.<br /><span>Einfach sprechen.</span></h1></div><p>Du bist der Kunde. Unser Agent hilft dir weiter — mit den Produkten aus dem aktuellen Testwarenkorb.</p></div>
+    <div class="intro"><div><p class="eyebrow">Rescova / KI-Demo</p><h1>Ausprobieren.<br /><span>Einfach sprechen.</span></h1></div><p>Du bist der Kunde. Unser Agent hilft dir weiter — mit den Produkten aus dem aktuellen Testwarenkorb.</p></div>
     <div class="workspace">
         <section class="conversation" aria-labelledby="conversation-title">
             <div class="section-top"><h2 id="conversation-title">Dein Gespräch</h2><span>{phase === 'connected' ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : 'Bis zu 5 Minuten'}</span></div>
             <div class="voice-area">
                 <div class="voice-mark" class:speaking={phase === 'connected' && agentState === 'speaking'} aria-hidden="true">{#each [25,48,74,100,66,42,22] as height, i}<i style={`--height:${height}px;--delay:${i * 95}ms`}></i>{/each}</div>
-                <p class="agent-name">{demo?.agentProfile?.name || 'Rescova'}</p><p class="agent-description">KI-Assistenz {demo?.brand ? `von ${demo.brand}` : 'für deinen Warenkorb'}</p>
+                <p class="agent-name">{demo?.agentProfile?.name || 'Jake'}</p><p class="agent-description">KI-Demo · {demo?.agentProfile?.persona === 'founder' ? 'Gründerrolle' : 'Shop-Beratung'}{demo?.brand ? ` bei ${demo.brand}` : ''}</p>
                 <p class="status" role="status"><span class:live={phase === 'connected'}></span>{statusText}</p>
                 <div class="controls">{#if phase === 'connected'}<button class="secondary" onclick={toggleMute}>{muted ? 'Mikrofon an' : 'Stummschalten'}</button><button class="primary" onclick={() => stop()}>Gespräch beenden</button>{:else}<button class="primary" disabled={phase === 'connecting' || data.unavailable} onclick={start}>{phase === 'connecting' ? 'Verbinde …' : phase === 'ended' ? 'Noch einmal sprechen' : 'Gespräch starten'}<span aria-hidden="true">↗</span></button>{/if}</div>
                 {#if data.unavailable}<p class="error" role="alert">Der Testwarenkorb ist gerade nicht verfügbar. Bitte lade die Seite später neu.</p>{/if}

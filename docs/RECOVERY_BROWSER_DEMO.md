@@ -13,3 +13,5 @@ Activation requires `RECOVERY_BROWSER_DEMO_ENABLED=1` in the isolated API/agent 
 Verification: Node integration tests cover session/worker-token separation, conversation readiness, reviewed versus merely prepared offers, interrupted reviews, no-discount links, alternative selections, stopping, public link construction, microphone-only tokens and concurrency limits. Offline SDK tests cover browser participant selection, tool routing, cleanup and phone-job rejection. Test a real browser session before reporting audio verified.
 
 References: [LiveKit job lifecycle](https://docs.livekit.io/agents/server/job/), [JavaScript SDK](https://docs.livekit.io/reference/client-sdk-js/), [agent state events](https://docs.livekit.io/reference/agents/events/). CLI/docs MCP were unavailable; API signatures were checked against the installed Python/Node SDKs and official web documentation.
+
+The founder persona may play the founder in the browser demo greeting; the page labels this as AI roleplay. Direct identity questions are answered truthfully. This demo-only greeting and identity instruction never apply to phone calls.

@@ -58,7 +58,11 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  t.mock.method(require('../src/recovery/shopify'),'graphql',async()=>({abandonedCheckouts:{nodes:[{completedAt:null,updatedAt:new Date().toISOString(),lineItems:{nodes:[{quantity:1,variant:{id:cart.items[0].variantId}}],pageInfo:{hasNextPage:false}}}]}}));
  t.mock.method(knowledge,'forCart',async()=>({products:[],policies:{status:'loaded',policies:[]}}));
  t.mock.method(discounts,'available',async()=>[]);
+ await db.query('UPDATE recovery_shops SET agent_profile=$2 WHERE id=$1',[shopId,{name:'Jake',persona:'founder',voice:'male',language:'de'}]);
  const started=await demo.start('127.0.0.1');
+ assert.match(started.agentProfile.greeting,/Hey, hier ist Jake, Gründer von Synthetic/);
+ assert.doesNotMatch(started.agentProfile.greeting,/KI-Assistenz/);
+ assert.match(require('../src/recovery/agent-profile').forShop({brand:'Synthetic',agent_profile:{name:'Jake',persona:'founder',voice:'male',language:'de'}}).greeting,/KI-Assistenz/);
  const jwt=JSON.parse(Buffer.from(started.token.split('.')[1],'base64url'));
  assert.deepEqual(jwt.video.canPublishSources,['microphone']);assert.equal(jwt.video.canPublishData,false);
  assert.equal(jwt.sub,'demo-visitor');assert.ok(jwt.video.room.startsWith('recovery-demo-'));

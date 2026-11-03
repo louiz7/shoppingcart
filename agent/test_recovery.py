@@ -255,12 +255,17 @@ class WorkerLifecycle(OfflineRecoveryCase):
                     self.module.profile_options({'agentProfile':{**profile,**change}})
 
     async def test_browser_demo_uses_same_agent_but_isolated_transport_and_tools(self):
-        ctx, http, session = self.fixture(finish='conversation_items')
+        ctx, http, session = self.fixture(finish='conversation_items',profile={
+            'name':'Jake','persona':'founder','voice':'male','language':'de',
+            'greeting':'Hey, hier ist Jake, Gründer von Synthetic shop.'})
         ctx.job.room.metadata = json.dumps({'mode':'recovery_demo','call_token':'a'*64})
         with patch.dict(os.environ, {'RECOVERY_LIVE_ENABLED':'0','RECOVERY_BROWSER_DEMO_ENABLED':'1'}):
             await self.run_fixture(ctx,http,session)
         ctx.wait_for_participant.assert_awaited_once_with(identity='demo-visitor')
         self.assertTrue(session.start_options['agent'].demo)
+        self.assertIn('klar gekennzeichneten KI-Demo',session.start_options['agent'].instructions)
+        self.assertIn('Auf direkte Fragen zu deiner Identität sage ehrlich',session.start_options['agent'].instructions)
+        self.assertIn('Hey, hier ist Jake, Gründer',session.greeting_options['instructions'])
         self.assertTrue(all('/internal/recovery/demo/tools/' in url for url in http.urls))
         self.assertEqual(http.requests.count('end'),1)
 
