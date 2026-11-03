@@ -109,3 +109,12 @@ At the owner's request, clear price objections now trigger an approved discount 
 Semantic cases cover first price objections in DE/EN, continued price resistance after a discount, an explicit product switch, no available discount, correcting a snowboard/jacket mix-up and unverified waterproofing. Mixed price/quality and cheaper-competitor expectations now match the requested discount-first behavior. Product/category replies are inspected from synthetic output, not inferred from tool success.
 
 Validation: all 50 reasoning-model cases and four browser-link cases passed after clarifying that an empty discount list must not trigger a zero-percent offer lookup. The 21 offline SDK checks passed. Review checked both prompt consumers and tool descriptions for contradictory price guidance; discount approval, user acceptance, tenant and contact-stop enforcement remain in the backend. No new recorded-audio or spoken end-to-end test was performed.
+
+
+## Compact voice prompt, 2026-11-03
+
+Following the [official GPT-Live prompting guide](https://developers.openai.com/api/docs/guides/live-prompting), the voice instructions now focus on conversational style, product grounding, the sales objective and handoff conditions. Repeated examples and detailed procedures were removed from the spoken layer; the resolved backend instructions, tools, model, voices and side-effect checks are unchanged. The core voice prompt is roughly 55% shorter (previously 1,138 whitespace-separated words).
+
+The voice layer retains the required order for price objections (approved discount, customer response, then alternatives), verified product identity, natural acceptance before a discounted link, no unsolicited messages, respect for thinking time and durable contact stops. Separate backchannel, interruption and delegation sections distinguish brief listening cues from repetitive acknowledgements and work announcements. They permit conversational variation without a mandatory question or fixed answer length.
+
+Verification: 21 offline SDK checks passed, and a direct comparison confirmed the resolved backend instructions are identical. Review covered the assembled demo/phone identity and language prompts, all retained conversational requirements and the existing tool boundaries. The existing reasoning-model evaluations would not test the changed voice layer, so they were not rerun as evidence of spoken naturalness. The owner will perform the listening test after deployment.
