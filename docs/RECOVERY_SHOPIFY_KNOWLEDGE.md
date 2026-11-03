@@ -64,3 +64,13 @@ Verification: eight Zendesk unit cases plus nine knowledge cases, 21 offline age
 The merchant's proposed Lea persona, service-first flow, discount-last policy, human callback ticketing and consent capture are separate planned work; this integration does not change those behaviors.
 
 API reference: [Zendesk Help Center articles](https://developer.zendesk.com/api-reference/help_center/help-center-api/articles/).
+
+### Requested article links
+
+`send_help_article(variant_id, article_id)` sends one explicitly requested public help article to the current call's existing phone number. It accepts IDs from `supportKnowledge`, never an arbitrary URL or recipient. The backend resolves the article from the tenant's verified product knowledge and constructs a canonical HTTPS Help Center link. Missing, mismatched or unavailable articles fail closed. A question about a product alone does not authorize a message; the reasoning agent interprets the request and the worker supplies current conversation provenance.
+
+Article SMS uses the existing Twilio dispatch, signed delivery receipts and action ledger. Tenant/call/contact authorization, suppression and conversation provenance are checked again before dispatch. Concurrent requests for the same article on the same checkout are deduplicated, including ambiguous provider outcomes. At most two distinct help articles may use the existing three-SMS checkout budget, preserving capacity for a checkout link. An article action has `messageType=help_article` and no checkout URL, discount or proposal attribution.
+
+In browser sessions the same tool displays the requested article in a separate help-links area without sending SMS or replacing the checkout link. The current snowboard test shop has no Deskspace help-center mapping, so it cannot expose Deskspace articles; browser link behavior is covered with synthetic source data. Public article URLs open with `noopener noreferrer` and titles are rendered as escaped text.
+
+Tests cover unknown IDs and URL substitution, current user evidence, concurrent duplicates, withdrawal during lookup, changed conversation, disappearing knowledge, ambiguous delivery, separate checkout capacity and browser isolation. Agent scenarios cover German/English article requests, natural acceptance, explicit refusal, article-only requests after a discount offer and arbitrary external URLs. No real SMS was sent for this feature.

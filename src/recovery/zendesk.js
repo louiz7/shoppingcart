@@ -82,4 +82,16 @@ function summary(result) {
     return {...result,productArticles:summarize(result.productArticles),shopArticles:result.shopArticles.map(a=>({...a,body:undefined,truncated:true}))};
 }
 
-module.exports={product,summary};
+function articleLink(details,articleId) {
+    const support=details?.supportKnowledge;
+    if(typeof articleId!=='string' || !/^[1-9]\d{0,15}$/.test(articleId) || !Number.isSafeInteger(Number(articleId))) {
+        throw require('./policy').problem('invalid_help_article');
+    }
+    const article=details?.status==='loaded' && support?.status==='loaded' && support.source==='zendesk' &&
+        [...(support.productArticles || []),...(support.shopArticles || [])].find(a=>a.id===articleId);
+    const url=`${ORIGIN}/hc/de/articles/${articleId}`;
+    if(!article || article.url!==url) throw require('./policy').problem('help_article_unavailable',409);
+    return {articleId,title:article.title,url};
+}
+
+module.exports={product,summary,articleLink};

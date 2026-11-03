@@ -22,7 +22,8 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  await db.query('INSERT INTO recovery_demo_sessions(id,token_hash,browser_hash,client_hash,shop_id,room,expires_at,data) VALUES($1,$2,$3,$4,$5,$6,NOW()+INTERVAL \'5 minutes\',$7)',[id,hash(token),hash(browser),'client',shopId,'recovery-demo-'+id,{context,seq:0,known:cart.items.map(i=>i.variantId)}]);
  t.mock.method(global,'fetch',async()=>{throw Error('External side effect forbidden')});
  t.mock.method(catalog,'snapshot',async(_shop,items)=>({...cart,items:items.map(i=>({...cart.items[0],...i})),subtotalCents:items.reduce((n,i)=>n+i.quantity*10000,0)}));
- t.mock.method(knowledge,'product',async()=>({status:'loaded',attributes:[]}));
+ t.mock.method(knowledge,'product',async()=>({status:'loaded',attributes:[],supportKnowledge:{status:'loaded',source:'zendesk',
+    productArticles:[{id:'123',title:'Aufbau',url:'https://support.deskspace.de/hc/de/articles/123'}],shopArticles:[]}}));
  t.mock.method(discounts,'verify',async(_shop,id)=>{assert.equal(id,'approved');return {id,code:'EXTRA10',percent:10,fingerprint:'same'}});
  async function message(role,interrupted=false){const eventId=randomUUID();await demo.tool(token,'transcript',{role,eventId,text:'not retained',interrupted});return eventId;}
  await assert.rejects(demo.tool(browser,'context'),{code:'invalid_demo_session'});
@@ -30,6 +31,13 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  await assert.rejects(demo.tool(token,'context'),{code:'contact_confirmation_required'});
  let user=await message('user');await message('assistant');await demo.tool(token,'confirm_contact',{userEventId:user});
  assert.equal((await demo.tool(token,'context')).cart.items[0].title,'Test item');
+ await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:randomUUID()}),{code:'conversation_changed'});
+ await assert.rejects(demo.tool(token,'send_help_article',{variantId:'gid://shopify/ProductVariant/999',articleId:'123',userEventId:user}),{code:'unknown_product'});
+ await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'999',userEventId:user}),{code:'help_article_unavailable'});
+ const help=await demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:user});
+ assert.equal(help.smsSent,false);assert.equal(help.status,'shown_in_browser');
+ assert.equal((await demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:user})).duplicate,true);
+ const helpView=await demo.status(browser);assert.equal(helpView.helpArticles.length,1);assert.equal(helpView.checkout,null);
  await demo.tool(token,'offer',{discountId:'approved',percent:10});
  await assert.rejects(demo.tool(token,'send_link',{useDiscount:true,userEventId:user}),{code:'checkout_review_required'});
  // A link without discount remains valid even after an offer was merely prepared.
@@ -57,6 +65,7 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  assert.equal(JSON.stringify((await db.query('SELECT data FROM recovery_demo_sessions WHERE id=$1',[id])).rows).includes('not retained'),false);
  assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_calls WHERE shop_id=$1',[shopId])).rows[0].n,0);
  await demo.tool(token,'stop');await assert.rejects(demo.tool(token,'send_link',{useDiscount:false,userEventId:user}),{code:'demo_ended'});
+ await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:user}),{code:'demo_ended'});
  // Exercise token issuance and persistent concurrency limits without a real provider.
  Object.assign(process.env,{INTERNAL_TOOL_SECRET:'synthetic-secret',LIVEKIT_URL:'wss://example.invalid',LIVEKIT_API_KEY:'synthetic',LIVEKIT_API_SECRET:'synthetic-secret',LIVEKIT_AGENT_NAME:'synthetic-agent'});
  const sdk=require('livekit-server-sdk');

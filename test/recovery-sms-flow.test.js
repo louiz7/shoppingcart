@@ -101,6 +101,74 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         return service.sendLink(call,useDiscount,rows[0]?.data.eventId);
     }
 
+    await t.test('requested help articles share SMS protections without becoming checkout links', async t => {
+        const knowledge=require('../src/recovery/knowledge');
+        const variant='gid://shopify/ProductVariant/1';
+        const details={status:'loaded',supportKnowledge:{status:'loaded',source:'zendesk',productArticles:[1,2,3].map(id=>({
+            id:String(id),title:'Synthetic article '+id,url:`https://support.deskspace.de/hc/de/articles/${id}`})),shopArticles:[]}};
+        const read=t.mock.method(knowledge,'product',async(_shop,id)=>{
+            assert.equal(id,variant);return details;
+        });
+        const f=await fixture(),before=send.mock.calls.length,eventId=randomUUID();
+        await service.recordTranscript(f.call,{role:'user',eventId,text:'Bitte schick mir die Aufbauanleitung per SMS.'});
+        const sendArticle=(id='1',event=eventId)=>service.sendHelpArticle(f.call,variant,id,event);
+        await assert.rejects(service.sendHelpArticle(f.call,variant,'1'),/conversation_evidence_required/);
+        await assert.rejects(sendArticle('999'),/help_article_unavailable/);
+        await assert.rejects(sendArticle('https://evil.invalid'),/invalid_help_article/);
+        const concurrent=await Promise.all([sendArticle(),sendArticle()]);
+        assert.equal(concurrent.filter(r=>r.duplicate).length,1);
+        assert.equal(concurrent.find(r=>!r.duplicate).status,'accepted');
+        assert.deepEqual(await sendArticle(),{status:'accepted',duplicate:true});
+        assert.equal(send.mock.calls.length,before+1);
+        assert.equal(send.mock.calls[before].arguments[0],f.snapshot.phone);
+        assert.equal(send.mock.calls[before].arguments[1],'Test shop: Hier ist der gewünschte Hilfeartikel: https://support.deskspace.de/hc/de/articles/1');
+        const action=(await db.query("SELECT data FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'",[f.checkoutId])).rows[0].data;
+        assert.equal(action.messageType,'help_article');assert.equal(action.checkoutUrl,undefined);assert.equal(action.proposalId,undefined);
+        assert.equal((await db.query("SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'",[f.checkoutId])).rows[0].n,0);
+        assert.equal((await sendArticle('2')).status,'accepted');
+        await assert.rejects(sendArticle('3'),/help_article_limit/);
+        assert.equal((await sendLink(f.call,false)).status,'accepted');
+        assert.equal(send.mock.calls.length,before+3);
+
+        const stopped=await fixture(),stoppedEvent=randomUUID();
+        await service.recordTranscript(stopped.call,{role:'user',eventId:stoppedEvent,text:'Ja, schick mir die Anleitung.'});
+        let reads=0;
+        read.mock.mockImplementation(async()=>{
+            if(++reads===2)await service.stopContact(stopped.customerId,stopped.shopId,stopped.checkoutId,'test_stop');
+            return details;
+        });
+        await assert.rejects(service.sendHelpArticle(stopped.call,variant,'1',stoppedEvent));
+        assert.equal(send.mock.calls.length,before+3);
+        read.mock.mockImplementation(async()=>details);
+
+        const changed=await fixture(),oldEvent=randomUUID();
+        await service.recordTranscript(changed.call,{role:'user',eventId:oldEvent,text:'Schick sie mir.'});
+        reads=0;
+        read.mock.mockImplementation(async()=>{
+            if(++reads===2)await service.recordTranscript(changed.call,{role:'user',eventId:randomUUID(),text:'Warte, doch keine Nachricht.'});
+            return details;
+        });
+        await assert.rejects(service.sendHelpArticle(changed.call,variant,'1',oldEvent),/conversation_changed/);
+        assert.equal(send.mock.calls.length,before+3);
+
+        const unavailable=await fixture(),unavailableEvent=randomUUID();
+        await service.recordTranscript(unavailable.call,{role:'user',eventId:unavailableEvent,text:'Bitte die Anleitung senden.'});
+        reads=0;
+        read.mock.mockImplementation(async()=>++reads===1?details:{status:'unavailable'});
+        await assert.rejects(service.sendHelpArticle(unavailable.call,variant,'1',unavailableEvent),/help_article_unavailable/);
+        assert.equal(send.mock.calls.length,before+3);
+        read.mock.mockImplementation(async()=>details);
+
+        const ambiguous=await fixture(),ambiguousEvent=randomUUID();
+        await service.recordTranscript(ambiguous.call,{role:'user',eventId:ambiguousEvent,text:'Bitte die Anleitung senden.'});
+        send.mock.mockImplementation(async()=>{throw Error('Synthetic timeout after dispatch');});
+        try {
+            await assert.rejects(service.sendHelpArticle(ambiguous.call,variant,'1',ambiguousEvent),/sms_result_unknown_do_not_retry/);
+            assert.deepEqual(await service.sendHelpArticle(ambiguous.call,variant,'1',ambiguousEvent),{status:'unknown',duplicate:true});
+            assert.equal(send.mock.calls.length,before+4);
+        } finally {send.mock.mockImplementation(async()=>({id:`SM${'c'.repeat(32)}`,status:'queued'}));}
+    });
+
     await t.test('SMS decisions require current user provenance, not keywords or another call', async () => {
         const f = await fixture(), other = await fixture();
         const own = randomUUID(), foreign = randomUUID();

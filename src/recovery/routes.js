@@ -136,6 +136,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'prepare_checkout': result = await require('./catalog').prepareCheckout(call,req.body.items,req.body.discountId); break;
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call, req.body.useDiscount, req.body.userEventId, req.body.preparedCheckoutId); break;
+    case 'send_help_article': result = await service.sendHelpArticle(call, req.body.variantId, req.body.articleId, req.body.userEventId); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
     case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop', call.id); break;
     case 'outcome': result = await service.outcome(call, req.body); break;
@@ -151,7 +152,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'latency':
         if (!['response_latency', 'playout_latency', 'tool_result_to_speech_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
         if (req.body.kind === 'tool_result_to_speech_latency' &&
-            !['context','offer','send_link','order_status','search_products','product_details','shop_policies','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
+            !['context','offer','send_link','send_help_article','order_status','search_products','product_details','shop_policies','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
         await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout',
             ...(req.body.kind === 'tool_result_to_speech_latency' ? { tool: req.body.tool } : {}) }, call.id, req.body.ms);
         result = { recorded: true };

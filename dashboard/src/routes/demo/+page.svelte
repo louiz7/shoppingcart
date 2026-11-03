@@ -9,7 +9,7 @@
     let audioHost: HTMLDivElement, generation = 0;
     const demo = $derived(session || data.demo);
     const money = (n: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(n / 100);
-    const activityLabels: Record<string, string> = { confirm_contact: 'Gespräch gestartet', context: 'Warenkorb geladen', search_products: 'Alternativen geprüft', product_details: 'Produktdetails geprüft', shop_policies: 'Shoprichtlinien geprüft', prepare_checkout: 'Neuen Warenkorb vorbereitet', offer: 'Rabatt geprüft', send_link: 'Checkout-Link bereitgestellt', stop: 'Kontaktstopp simuliert', outcome: 'Gespräch abgeschlossen', order_status: 'Bestellstatus geprüft' };
+    const activityLabels: Record<string, string> = { confirm_contact: 'Gespräch gestartet', context: 'Warenkorb geladen', search_products: 'Alternativen geprüft', product_details: 'Produktdetails geprüft', shop_policies: 'Shoprichtlinien geprüft', prepare_checkout: 'Neuen Warenkorb vorbereitet', offer: 'Rabatt geprüft', send_link: 'Checkout-Link bereitgestellt', send_help_article: 'Hilfeartikel bereitgestellt', stop: 'Kontaktstopp simuliert', outcome: 'Gespräch abgeschlossen', order_status: 'Bestellstatus geprüft' };
     const statusText = $derived(phase === 'connecting' ? 'Verbindung wird aufgebaut' : phase === 'connected' ? (({ speaking: 'Agent spricht', thinking: 'Agent prüft dein Anliegen', listening: 'Agent hört zu' } as Record<string,string>)[agentState] || 'Agent wird verbunden') : phase === 'ended' ? 'Gespräch beendet' : 'Bereit für dein Gespräch');
     async function stop(send = true) {
         generation++;
@@ -85,10 +85,11 @@
             <div class="section-top"><h2>Dein Testwarenkorb</h2><span>Shopify</span></div>
             {#if demo?.cart}<div class="cart-items">{#each demo.cart.items as item}<article class="cart-item"><div class="item-quantity">{item.quantity}<span>×</span></div><div><h3>{item.title}</h3>{#if item.variantTitle && item.variantTitle !== 'Default Title'}<p>{item.variantTitle}</p>{/if}</div><strong>{money(item.currentPriceCents * item.quantity)}</strong></article>{/each}</div><div class="total"><span>Warenwert</span><strong>{money(demo.cart.subtotalCents)}</strong></div><p class="fine">Versand und Steuern werden im Checkout bestätigt. Produktdaten werden beim Start aus Shopify geladen.{#if demo.cart.currency !== 'EUR'} Demo-Anzeige in EUR, ohne Umrechnung. Der Shopify-Testcheckout rechnet in {demo.cart.currency} ab.{/if}</p>{:else}<p class="fine">Warenkorb momentan nicht verfügbar.</p>{/if}
             <div class="link-panel"><h2>Dein nächster Schritt</h2>{#if session?.checkout}<p>{session.checkout.discountPercent ? `${session.checkout.discountPercent} % Rabatt sind im Link hinterlegt.` : 'Dein Link ist ohne zusätzlichen Rabatt vorbereitet.'}</p><a class="checkout" href={session.checkout.url} target="_blank" rel="noopener noreferrer">Testcheckout öffnen <span aria-hidden="true">↗</span></a><p class="fine">Dieser Testshop ist passwortgeschützt. Bei freigeschalteten Live-Shops führt der Link direkt zum Checkout.</p>{:else}<p>Wenn du im Gespräch einen Checkout-Link möchtest, erscheint er hier.</p>{/if}</div>
+            {#if session?.helpArticles?.length}<div class="link-panel"><h2>Deine Hilfeartikel</h2>{#each session.helpArticles as article}<a class="checkout" href={article.url} target="_blank" rel="noopener noreferrer">{article.title}<span aria-hidden="true">↗</span></a>{/each}</div>{/if}
             {#if session?.activity?.length}<div class="activity"><h2>Im Gespräch</h2>{#each session.activity.slice(-3) as item}<p><span aria-hidden="true">✓</span>{activityLabels[item.name] || 'Anliegen bearbeitet'}</p>{/each}</div>{/if}
         </aside>
     </div>
-    <footer><p>Echter Agent. Echte Produktdaten. Simulierter Kontakt.</p><p>Keine echten SMS oder Kundenanrufe; Checkout-Links erscheinen hier im Browser.</p></footer>
+    <footer><p>Echter Agent. Echte Produktdaten. Simulierter Kontakt.</p><p>Keine echten SMS oder Kundenanrufe; gewünschte Links erscheinen hier im Browser.</p></footer>
     <div bind:this={audioHost} class="audio-host"></div>
 </main>
 

@@ -51,7 +51,7 @@ class RecoveryContracts(OfflineRecoveryCase):
         self.assertTrue(registered[0])
         agent = module.RecoveryAgent('synthetic-token', {'brand': 'Test', 'brandVoice': 'Friendly'}, None)
         self.assertEqual({tool.info.name for tool in agent.tools}, {
-            'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link',
+            'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link', 'send_help_article',
             'get_order_status', 'stop_contact', 'log_outcome', 'end_call', 'search_products', 'prepare_checkout',
             'get_product_details', 'get_shop_policies',
         })
@@ -79,6 +79,8 @@ class RecoveryContracts(OfflineRecoveryCase):
         agent.tool.assert_awaited_with('prepare_checkout', {'items':[{'variantId':'gid://shopify/ProductVariant/2','quantity':2}], 'discountId':None})
         await agent.send_checkout_link(None, prepared_checkout_id='server-proposal')
         agent.tool.assert_awaited_with('send_link', {'useDiscount':False,'preparedCheckoutId':'server-proposal'}, context=None)
+        await agent.send_help_article(None, 'gid://shopify/ProductVariant/2', '123')
+        agent.tool.assert_awaited_with('send_help_article', {'variantId':'gid://shopify/ProductVariant/2','articleId':'123'}, context=None)
         await agent.search_products(None, 'Snowboard', max_price_cents=50000)
         agent.tool.assert_awaited_with('search_products', {'query':'Snowboard','maxPriceCents':50000})
         await agent.get_product_details(None, 'gid://shopify/ProductVariant/2')
@@ -394,15 +396,15 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertEqual([payload for name,payload in http.payloads if name=='latency'],[])
 
     async def test_new_user_turn_or_interrupted_response_invalidates_pending_action(self):
-        for interrupted in [False, True]:
-            with self.subTest(interrupted=interrupted):
+        for tool, interrupted in [(tool, interrupted) for tool in ('send_link', 'send_help_article') for interrupted in (False, True)]:
+            with self.subTest(tool=tool, interrupted=interrupted):
                 agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
                 agent.latest_user_event = 'old-user-event'
                 release = asyncio.Event()
                 agent.transcript_tail = asyncio.create_task(release.wait())
                 context = SimpleNamespace(speech_handle=SimpleNamespace(interrupted=interrupted))
                 with patch.object(self.module,'backend_tool',new=AsyncMock()) as backend:
-                    action = asyncio.create_task(agent.tool('send_link',context=context))
+                    action = asyncio.create_task(agent.tool(tool,context=context))
                     await asyncio.sleep(0)
                     if not interrupted:
                         agent.latest_user_event = 'new-user-event'

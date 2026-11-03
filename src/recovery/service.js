@@ -426,12 +426,14 @@ async function conversationEvidence(client, call, userEventId) {
     return rows[0];
 }
 
-async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount, userEventId, preparedCheckoutId, preparedProof) {
+async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount, userEventId, preparedCheckoutId, preparedProof, article = null) {
     const { rows: calls } = await client.query(`SELECT id FROM recovery_calls WHERE id=$1 AND shop_id=$2
         AND checkout_id=$3 AND contact_key=$4 AND identity_verified AND expires_at>NOW()
-        AND status IN ('reserved','dialing','connected')`, [call.id, shop.id, call.checkout_id, ctx.checkout.contact_key]);
+        AND ended_at IS NULL AND status IN ('reserved','dialing','connected')`, [call.id, shop.id, call.checkout_id, ctx.checkout.contact_key]);
     if (!calls[0]) throw policy.problem('call_authorization_changed', 409);
     const consent = await conversationEvidence(client, call, userEventId);
+    if(article) return {messageType:'help_article',targetKey:`article:${article.articleId}`,
+        consentEvent:consent.data.eventId,articleId:article.articleId,articleTitle:article.title,articleUrl:article.url};
     if (preparedCheckoutId) return require('./catalog').authorizeProposal(client,call,shop,preparedCheckoutId,preparedProof,useDiscount,consent);
     if (!useDiscount) {
         const plain = new URL(policy.checkoutUrl(ctx.checkout.snapshot.checkoutUrl, shop));
@@ -468,11 +470,21 @@ async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount
         cartHash: offer.cartHash, checkoutUrl: policy.checkoutUrl(offer.checkoutUrl, shop) };
 }
 
-async function sendLink(call, useDiscount = false, userEventId, preparedCheckoutId = null) {
+async function sendHelpArticle(call, variantId, articleId, userEventId) {
+    return sendLink(call,false,userEventId,null,{variantId,articleId});
+}
+
+async function resolveHelpArticle(call, reference) {
+    const details=await require('./catalog').productDetails(call,reference.variantId);
+    return require('./zendesk').articleLink(details,reference.articleId);
+}
+
+async function sendLink(call, useDiscount = false, userEventId, preparedCheckoutId = null, helpReference = null) {
     if (preparedCheckoutId !== null && !uuid(preparedCheckoutId)) throw policy.problem('invalid_prepared_checkout');
     if (typeof useDiscount !== 'boolean') throw policy.problem('invalid_discount_selection');
     if (!call.identity_verified) throw policy.problem('contact_confirmation_required', 409);
     await refresh(call.customer_id, call.shop_id, call.checkout_id);
+    const article = helpReference ? await resolveHelpArticle(call,helpReference) : null;
     const initialDiscountProof = useDiscount && !preparedCheckoutId ? await discounts.offerProof(call) : null;
     const preparedProof = preparedCheckoutId ? await require('./catalog').verifyProposal(call,preparedCheckoutId,useDiscount) : null;
     const action = await transaction(async (client) => {
@@ -480,14 +492,18 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
         const ctx = await state(client, shop, call.checkout_id, true);
         const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
         if (denied) throw policy.problem(denied, 409);
-        const authorization = preparedCheckoutId ? await authorizeLink(client,call,shop,ctx,null,useDiscount,userEventId,preparedCheckoutId,preparedProof) : null;
+        const authorization = preparedCheckoutId || article ? await authorizeLink(client,call,shop,ctx,null,useDiscount,userEventId,preparedCheckoutId,preparedProof,article) : null;
         const { rows: prior } = await client.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'
             AND COALESCE(data->>'targetKey','original')=$2`, [call.checkout_id,authorization?.targetKey || 'original']);
         if (prior[0]) return { duplicate: true, status: prior[0].status };
         if (shop.mode === 'live') telephony.assertSmsReady();
         const confirmed = authorization || await authorizeLink(client, call, shop, ctx, initialDiscountProof, useDiscount, userEventId);
-        const count = await client.query(`SELECT COUNT(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`,[call.checkout_id]);
+        const count = await client.query(`SELECT COUNT(*)::int AS n,
+            COUNT(*) FILTER (WHERE data->>'messageType'='help_article')::int AS help_count
+            FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'`,[call.checkout_id]);
         if (count.rows[0].n >= 3) throw policy.problem('sms_attempt_limit',409);
+        // Reserve one of the existing three SMS slots for a checkout link.
+        if(article && count.rows[0].help_count>=2) throw policy.problem('help_article_limit',409);
         const id = randomUUID();
         await client.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'sms',$3,$4)`,
         [id, call.checkout_id, shop.mode === 'simulation' ? 'simulated' : 'pending', JSON.stringify(confirmed)]);
@@ -499,15 +515,17 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
     try {
         const latestDiscountProof = useDiscount && !preparedCheckoutId ? await discounts.offerProof(call) : null;
         const latestPreparedProof = preparedCheckoutId ? await require('./catalog').verifyProposal(call,preparedCheckoutId,useDiscount) : null;
+        const latestArticle = helpReference ? await resolveHelpArticle(call,helpReference) : null;
         const text = await transaction(async (client) => {
             const shop = await shopFor(call.customer_id, call.shop_id, client, true);
             const ctx = await state(client, shop, call.checkout_id, true);
             const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
             if (denied) throw policy.problem(denied, 409);
-            const authorization = await authorizeLink(client, call, shop, ctx, latestDiscountProof, useDiscount, userEventId, preparedCheckoutId, latestPreparedProof);
+            const authorization = await authorizeLink(client, call, shop, ctx, latestDiscountProof, useDiscount, userEventId, preparedCheckoutId, latestPreparedProof,latestArticle);
             if (ctx.checkout.phone !== action.number || Object.keys(action.authorization).some((key) =>
                 authorization[key] !== action.authorization[key])) throw policy.problem('sms_authorization_changed', 409);
-            return `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
+            return article ? `${shop.brand}: Hier ist der gewünschte Hilfeartikel: ${authorization.articleUrl}` :
+                `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
         });
         dispatched = true;
         const sent = await telephony.sendSms(action.number, text, action.id);
@@ -610,4 +628,4 @@ async function dashboard(customerId) {
 }
 
 module.exports = { uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
-    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, recordTranscript, confirmContact, outcome, dashboard };
+    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, sendHelpArticle, recordTranscript, confirmContact, outcome, dashboard };

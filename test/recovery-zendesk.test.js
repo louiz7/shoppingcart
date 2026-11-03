@@ -7,6 +7,17 @@ const article=(id,sectionId,title,body='<p>Public facts.</p>',extra={})=>({id,se
     draft:false,user_segment_id:null,locale:'de',outdated:false,updated_at:'2026-01-01T00:00:00Z',...extra});
 const response=articles=>new Response(JSON.stringify({articles,next_page:null}),{headers:{'Content-Type':'application/json'}});
 
+test('article links come only from verified product knowledge, never from caller-provided URLs',()=>{
+    const kb=load(),article={id:'123',title:'Garantie',url:'https://support.deskspace.de/hc/de/articles/123'};
+    const details={status:'loaded',supportKnowledge:{status:'loaded',source:'zendesk',productArticles:[article],shopArticles:[]}};
+    assert.deepEqual(kb.articleLink(details,'123'),{articleId:'123',title:'Garantie',url:article.url});
+    for(const id of ['https://evil.invalid','../123','0','9007199254740992',123]) assert.throws(()=>kb.articleLink(details,id),{code:'invalid_help_article'});
+    assert.throws(()=>kb.articleLink(details,'124'),{code:'help_article_unavailable'});
+    assert.throws(()=>kb.articleLink({status:'unavailable'},'123'),{code:'help_article_unavailable'});
+    article.url='https://support.deskspace.de.evil.invalid/hc/de/articles/123';
+    assert.throws(()=>kb.articleLink(details,'123'),{code:'help_article_unavailable'});
+});
+
 test('Zendesk only loads the configured live tenant, never another customer or the snowboard demo',async t=>{
     const fetch=t.mock.method(global,'fetch',async()=>{throw Error('must not fetch');});const kb=load();
     for(const s of [{...shop,customer_id:1},{...shop,id:'other'},{...shop,domain:'test-store-slzn5m7l.myshopify.com'},{...shop,mode:'demo'}]) {

@@ -55,7 +55,7 @@ function publicView(row) {
     const s=row.data;
     return {brand:s.context?.brand,agentProfile:s.context?.agentProfile,cart:s.context?.cart,verifiedAt:s.context?.verifiedAt,
         expiresAt:row.expires_at,ended:Boolean(row.ended_at)||new Date(row.expires_at)<=new Date(),
-        checkout:s.link || null,activity:s.activity || [],durationSeconds:TTL/1000};
+        checkout:s.link || null,helpArticles:s.helpArticles || [],activity:s.activity || [],durationSeconds:TTL/1000};
 }
 async function info() { const {context}=await source();return {brand:context.brand,agentProfile:context.agentProfile,cart:context.cart,verifiedAt:context.verifiedAt,durationSeconds:TTL/1000}; }
 async function start(address) {
@@ -142,6 +142,18 @@ async function tool(token,name,input={}) {
             case 'search_products': result=await catalog.search(shop,input.query,input.maxPriceCents??null);s.known=[...new Set([...s.known,...result.products.map(i=>i.variantId)])].slice(-100);break;
             case 'product_details': if(!s.known.includes(input.variantId)) throw policy.problem('unknown_product');result=await knowledge.product(shop,input.variantId);break;
             case 'shop_policies': result=await knowledge.policies(shop);break;
+            case 'send_help_article': {
+                consent(s,input.userEventId);
+                if(!s.known.includes(input.variantId)) throw policy.problem('unknown_product');
+                const article=require('./zendesk').articleLink(await knowledge.product(shop,input.variantId),input.articleId);
+                const prior=(s.helpArticles || []).some(a=>a.articleId===article.articleId);
+                if(!prior){
+                    if((s.helpArticles || []).length>=2) throw policy.problem('help_article_limit',409);
+                    s.helpArticles=[...(s.helpArticles || []),article];
+                }
+                result={status:'shown_in_browser',simulated:true,smsSent:false,duplicate:prior,article,
+                    instructions:'Der Hilfeartikel ist in der Browserdemo sichtbar. Keine SMS versendet.'};break;
+            }
             case 'prepare_checkout': {
                 catalog.selection(input.items);
                 if(input.items.some(i=>!s.known.includes(i.variantId))) throw policy.problem('unknown_product');
