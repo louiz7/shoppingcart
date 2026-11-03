@@ -88,7 +88,7 @@
             {#if session?.activity?.length}<div class="activity"><h2>Im Gespräch</h2>{#each session.activity.slice(-3) as item}<p><span aria-hidden="true">✓</span>{activityLabels[item.name] || 'Anliegen bearbeitet'}</p>{/each}</div>{/if}
         </aside>
     </div>
-    <footer><p>Echter Agent. Echte Produktdaten. Simulierter Kontakt.</p><p>Dein Mikrofon-Audio wird für das Gespräch von LiveKit und OpenAI verarbeitet. Keine Audioaufzeichnung durch Rescova. Keine echten SMS oder Kundenanrufe; Checkout-Links erscheinen hier im Browser.</p></footer>
+    <footer><p>Echter Agent. Echte Produktdaten. Simulierter Kontakt.</p><p>Keine echten SMS oder Kundenanrufe; Checkout-Links erscheinen hier im Browser.</p></footer>
     <div bind:this={audioHost} class="audio-host"></div>
 </main>
 
