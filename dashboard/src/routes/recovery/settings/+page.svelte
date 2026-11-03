@@ -24,15 +24,15 @@
 	let code = $state(untrack(() => form?.values?.code || ''));
 	let percent = $state<number | undefined>(untrack(() => form?.values ? Number(form.values.percent) : Math.min(data.settings?.shops?.[0]?.maxDiscountPercent || 10, 10)));
 	let minimum = $state(untrack(() => form?.values?.minSubtotal || ((data.settings?.shops?.[0]?.minSubtotalCents || 0) / 100).toFixed(2).replace('.', ',')));
-	let validDays = $state<number | undefined>(untrack(() => form?.values ? Number(form.values.validDays) : 7));
-	let usageLimit = $state<number | undefined>(untrack(() => form?.values ? Number(form.values.usageLimit) : 100));
+	let validDays = $state<number | undefined>(untrack(() => form?.values?.validDays ? Number(form.values.validDays) : undefined));
+	let usageLimit = $state<number | undefined>(untrack(() => form?.values?.usageLimit ? Number(form.values.usageLimit) : undefined));
 	let submitting = $state(false);
 	let submitError = $state('');
 	let discountUncertain = $state(untrack(() => !!form?.uncertain));
 	const money = (cents: number) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: shop?.currency || 'EUR' }).format(cents / 100);
 	const date = (value: string) => new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium' }).format(new Date(value));
 	const label = (discount: any) => discount.status === 'confirmed'
-		? (Date.parse(discount.expiresAt) <= Date.now() ? 'Abgelaufen' : 'In Shopify erstellt')
+		? (discount.expiresAt !== null && Date.parse(discount.expiresAt) <= Date.now() ? 'Abgelaufen' : 'In Shopify erstellt')
 		: ({ pending: 'Wird geprüft', unknown: 'Bestätigung ausstehend', failed: 'Nicht erstellt' } as Record<string, string>)[discount.status] || 'Status unbekannt';
 	function changeShop() {
 		const current = shops.find((item: any) => item.id === selectedShop) || shops[0];
@@ -97,7 +97,7 @@
 					<span class="preview-label">Dein Angebot · Entwurf</span>
 					<p class="preview-offer">{percent ?? '—'}<span>% Rabatt</span></p>
 					<p class="preview-code">{code.trim().toUpperCase() || 'Dein Rabattcode'}</p>
-					<p class="preview-terms">Ab {minimum || '—'} {shop.currency} · {validDays ?? '—'} Tage gültig</p>
+					<p class="preview-terms">Ab {minimum || '—'} {shop.currency} · {validDays === undefined ? 'Unbefristet' : `${validDays} Tage gültig`}</p>
 				</div>
 			</div>
 			<form id="discount-form" class="settings-panel" method="POST" action="?/createDiscount" aria-busy={submitting}
@@ -131,8 +131,8 @@
 						<div class="field"><label for="minimum">Mindestbestellwert ({shop.currency})</label><input id="minimum" name="minSubtotal" inputmode="decimal" pattern={'[0-9]+([,.][0-9]{1,2})?'} bind:value={minimum} required /></div>
 					</div>
 					<div class="field-pair">
-						<div class="field"><label for="days">Gültigkeit in Tagen</label><input id="days" type="number" name="validDays" min="1" step="1" bind:value={validDays} required /></div>
-						<div class="field"><label for="usage">Maximale Einlösungen</label><input id="usage" type="number" name="usageLimit" min="1" max="2147483647" step="1" bind:value={usageLimit} required /></div>
+						<div class="field"><label for="days">Gültigkeit in Tagen</label><input id="days" type="number" name="validDays" min="1" step="1" bind:value={validDays} placeholder="Unbefristet" aria-describedby="days-hint" /><p id="days-hint" class="field-hint">Leer lassen für unbefristete Gültigkeit.</p></div>
+						<div class="field"><label for="usage">Maximale Einlösungen</label><input id="usage" type="number" name="usageLimit" min="1" max="2147483647" step="1" bind:value={usageLimit} placeholder="Unbegrenzt" aria-describedby="usage-hint" /><p id="usage-hint" class="field-hint">Leer lassen für unbegrenzte Einlösungen.</p></div>
 					</div>
 					<div class="form-footer"><p>Der Code wird in deinem Shopify-Shop erstellt.</p><button class="primary" type="submit">{submitting ? 'Wird in Shopify angelegt …' : 'In Shopify anlegen'}</button></div>
 				</fieldset>
@@ -145,7 +145,7 @@
 			<div class="section-copy"><h2 id="catalogue-heading">Angebote für den Agenten</h2><p>Hier angelegte Codes werden vor jedem Angebot mit Shopify abgeglichen. Verfügbarkeit, Gültigkeit und Rabattgrenzen müssen weiterhin passen.</p></div>
 			<div class="catalogue settings-panel">
 				{#if !shop.discounts?.length}<div class="catalogue-empty"><h3>Noch kein Rabattcode angelegt</h3><p>Dein erstes Angebot erscheint hier, sobald du es in Shopify anlegst.</p></div>
-				{:else}{#each shop.discounts as discount}<article class="discount-row"><div class="discount-title"><h3>{discount.title}</h3><span class="status" class:confirmed={discount.status === 'confirmed' && Date.parse(discount.expiresAt) > Date.now()}>{label(discount)}</span></div><div class="discount-details"><p class="discount-code">{discount.code}</p><p>{discount.percent} % ab {money(discount.minSubtotalCents)}</p></div><p class="discount-meta">{discount.expiresAt ? `Gültig bis ${date(discount.expiresAt)}` : 'Gültigkeit noch nicht bestätigt'} · Max. {discount.usageLimit} Einlösungen</p></article>{/each}{/if}
+				{:else}{#each shop.discounts as discount}<article class="discount-row"><div class="discount-title"><h3>{discount.title}</h3><span class="status" class:confirmed={discount.status === 'confirmed' && (discount.expiresAt === null || Date.parse(discount.expiresAt) > Date.now())}>{label(discount)}</span></div><div class="discount-details"><p class="discount-code">{discount.code}</p><p>{discount.percent} % ab {money(discount.minSubtotalCents)}</p></div><p class="discount-meta">{discount.expiresAt === null ? 'Unbefristet' : `Gültig bis ${date(discount.expiresAt)}`} · {discount.usageLimit === null ? 'Unbegrenzte Einlösungen' : `Max. ${discount.usageLimit} Einlösungen`}</p></article>{/each}{/if}
 			</div>
 		</section>
 	{/if}

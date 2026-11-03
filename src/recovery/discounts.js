@@ -16,13 +16,13 @@ const FIELDS = `id ... on DiscountCodeNode { codeDiscount { __typename ... on Di
 
 function view(row) {
     return { id: row.id, title: row.title, code: row.code, percent: row.percent,
-        minSubtotalCents: row.min_subtotal_cents, expiresAt: new Date(row.expires_at).toISOString(),
+        minSubtotalCents: row.min_subtotal_cents, expiresAt: row.expires_at===null ? null : new Date(row.expires_at).toISOString(),
         usageLimit: row.usage_limit, status: row.status, createdAt: new Date(row.created_at).toISOString() };
 }
 
 function fingerprint(row) {
     return createHash('sha256').update(JSON.stringify([row.id,row.shopify_id,row.code,row.percent,row.min_subtotal_cents,
-        new Date(row.expires_at).toISOString(),row.usage_limit])).digest('hex');
+        row.expires_at===null ? null : new Date(row.expires_at).toISOString(),row.usage_limit])).digest('hex');
 }
 
 function validate(shop, input) {
@@ -33,23 +33,23 @@ function validate(shop, input) {
         typeof input.code !== 'string' || !/^[A-Z0-9_-]{3,32}$/.test(input.code) ||
         !Number.isInteger(input.percent) || input.percent<1 || input.percent>rules.maxDiscountPercent ||
         !Number.isSafeInteger(input.minSubtotalCents) || input.minSubtotalCents<rules.minSubtotalCents || input.minSubtotalCents>2147483647 ||
-        !Number.isInteger(input.validDays) || input.validDays<1 || !(new Date(Date.now()+input.validDays*86400000).getUTCFullYear()<=9999) ||
-        !Number.isInteger(input.usageLimit) || input.usageLimit<1 || input.usageLimit>2147483647) throw policy.problem('invalid_discount_rules', 409);
+        (input.validDays!==null && (!Number.isInteger(input.validDays) || input.validDays<1 || !(new Date(Date.now()+input.validDays*86400000).getUTCFullYear()<=9999))) ||
+        (input.usageLimit!==null && (!Number.isInteger(input.usageLimit) || input.usageLimit<1 || input.usageLimit>2147483647))) throw policy.problem('invalid_discount_rules', 409);
     return { ...input, title: input.title.trim() };
 }
 
 function allowed(shop, row, subtotal = Infinity) {
     const rules = policy.rules(shop.rules);
     return row.percent<=rules.maxDiscountPercent && row.min_subtotal_cents>=rules.minSubtotalCents &&
-        subtotal>=row.min_subtotal_cents && new Date(row.expires_at)>new Date();
+        subtotal>=row.min_subtotal_cents && (row.expires_at===null || new Date(row.expires_at)>new Date());
 }
 
 function matches(shop, row, node) {
     const actual = node?.codeDiscount, minimum = actual?.minimumRequirement;
     if (!actual || node.id!==row.shopify_id || actual.__typename!=='DiscountCodeBasic' || actual.status!=='ACTIVE' ||
         !Number.isFinite(Date.parse(actual.startsAt)) || new Date(actual.startsAt)>new Date() ||
-        !Number.isFinite(Date.parse(actual.endsAt)) || +new Date(actual.endsAt)!==+new Date(row.expires_at) ||
-        actual.usageLimit!==row.usage_limit || !Number.isInteger(actual.asyncUsageCount) || actual.asyncUsageCount<0 || actual.asyncUsageCount>=row.usage_limit ||
+        (row.expires_at===null ? actual.endsAt!==null : !Number.isFinite(Date.parse(actual.endsAt)) || +new Date(actual.endsAt)!==+new Date(row.expires_at)) ||
+        actual.usageLimit!==row.usage_limit || !Number.isInteger(actual.asyncUsageCount) || actual.asyncUsageCount<0 || (row.usage_limit!==null && actual.asyncUsageCount>=row.usage_limit) ||
         actual.appliesOncePerCustomer!==true || actual.context?.__typename!=='DiscountBuyerSelectionAll' ||
         actual.customerGets?.value?.__typename!=='DiscountPercentage' ||
         !Number.isFinite(actual.customerGets.value.percentage) ||
@@ -100,7 +100,7 @@ async function create(customerId, shopId, input) {
         }
         const result = await client.query(`INSERT INTO recovery_discounts(id,shop_id,request_id,title,code,percent,min_subtotal_cents,valid_days,expires_at,usage_limit)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`, [randomUUID(),shop.id,value.requestId,value.title,value.code,value.percent,
-            value.minSubtotalCents,value.validDays,new Date(Math.floor(Date.now()/1000)*1000+value.validDays*86400000),value.usageLimit]);
+            value.minSubtotalCents,value.validDays,value.validDays===null ? null : new Date(Math.floor(Date.now()/1000)*1000+value.validDays*86400000),value.usageLimit]);
         return { shop, row: result.rows[0] };
     });
     if (reserved.existing) return { discount: view(reserved.row) };
@@ -109,7 +109,7 @@ async function create(customerId, shopId, input) {
     try {
         const response = await shopify.graphql(shop, `mutation RecoveryMerchantDiscount($input:DiscountCodeBasicInput!) {
             discountCodeBasicCreate(basicCodeDiscount:$input) { codeDiscountNode { id } userErrors { field code message } }
-        }`, { input: { title: row.title,code: row.code,startsAt: new Date().toISOString(),endsAt: new Date(row.expires_at).toISOString(),
+        }`, { input: { title: row.title,code: row.code,startsAt: new Date().toISOString(),endsAt: row.expires_at===null ? null : new Date(row.expires_at).toISOString(),
             context: { all: 'ALL' }, customerGets: { value: { percentage: row.percent/100 }, items: { all: true } },
             ...(row.min_subtotal_cents>0 ? { minimumRequirement: { subtotal: { greaterThanOrEqualToSubtotal: (row.min_subtotal_cents/100).toFixed(2) } } } : {}),
             usageLimit: row.usage_limit,appliesOncePerCustomer: true,
@@ -148,7 +148,7 @@ async function assertApproved(client, shop, proof, subtotal) {
 
 async function available(shop, subtotal) {
     // shortcut: inspect the latest 20 approved codes per call; add catalog pagination if merchants need larger catalogs.
-    const result = await db.query(`SELECT * FROM recovery_discounts WHERE shop_id=$1 AND status='confirmed' AND expires_at>NOW() ORDER BY created_at DESC LIMIT 20`, [shop.id]);
+    const result = await db.query(`SELECT * FROM recovery_discounts WHERE shop_id=$1 AND status='confirmed' AND (expires_at IS NULL OR expires_at>NOW()) ORDER BY created_at DESC LIMIT 20`, [shop.id]);
     try { return (await inspect(shop,result.rows.filter((row) => allowed(shop,row,subtotal)))).map(view); }
     catch { return []; }
 }

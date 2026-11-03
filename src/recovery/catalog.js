@@ -122,7 +122,7 @@ async function prepareCheckout(call, items, discountId = null) {
             AND kind='checkout_prepared' ORDER BY created_at DESC LIMIT 1`,[call.id,call.shop_id]);
         if (prior.rows[0]?.data.targetKey === targetKey && new Date(prior.rows[0].data.expiresAt)>new Date()) return view(prior.rows[0]);
         const id = randomUUID(), data = { targetKey, snapshot: cart, offer, discount: proof,
-            expiresAt: new Date(Math.min(Date.now()+30*60000,proof ? Date.parse(proof.expiresAt) : Infinity)).toISOString() };
+            expiresAt: new Date(Math.min(Date.now()+30*60000,proof?.expiresAt ? Date.parse(proof.expiresAt) : Infinity)).toISOString() };
         await event(client,call.shop_id,'checkout_prepared',data,call.id,null,id);
         return view({id,data});
     });

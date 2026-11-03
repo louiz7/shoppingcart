@@ -67,12 +67,12 @@ export const actions: Actions = {
 		const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 		const amount = /^(\d{1,8})(?:[,.](\d{1,2}))?$/.exec(values.minSubtotal);
 		const minSubtotalCents = amount ? Number(amount[1]) * 100 + Number((amount[2] || '').padEnd(2, '0')) : NaN;
-		const percent = Number(values.percent), validDays = Number(values.validDays), usageLimit = Number(values.usageLimit);
+		const percent = Number(values.percent), validDays = values.validDays === '' ? null : Number(values.validDays), usageLimit = values.usageLimit === '' ? null : Number(values.usageLimit);
 		if (!uuid.test(values.shopId) || !uuid.test(values.requestId) || !values.title || values.title.length > 80 ||
 			!(/^[A-Z0-9_-]{3,32}$/).test(values.code) || !Number.isInteger(percent) || percent < 1 || percent > 100 ||
 			!Number.isSafeInteger(minSubtotalCents) || minSubtotalCents > 2147483647 ||
-			!Number.isInteger(validDays) || validDays < 1 || !(new Date(Date.now() + validDays * 86400000).getUTCFullYear() <= 9999) ||
-			!Number.isInteger(usageLimit) || usageLimit < 1 || usageLimit > 2147483647) {
+			(validDays !== null && (!Number.isInteger(validDays) || validDays < 1 || !(new Date(Date.now() + validDays * 86400000).getUTCFullYear() <= 9999))) ||
+			(usageLimit !== null && (!Number.isInteger(usageLimit) || usageLimit < 1 || usageLimit > 2147483647))) {
 			return fail(400, { error: 'Bitte prüfe die Felder und die angegebenen Grenzen.', values, uncertain: false });
 		}
 		try {

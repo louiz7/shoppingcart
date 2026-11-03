@@ -377,7 +377,7 @@ async function getOffer(call, percent, discountId) {
         }
         const code = approved?.code || (percent ? `RC${randomBytes(8).toString('hex').toUpperCase()}` : null);
         const expiresAt = new Date(Math.min(Date.now() + policy.rules(shop.rules).offerHours * 3600000,
-            approved ? Date.parse(approved.expiresAt) : Infinity)).toISOString();
+            approved?.expiresAt ? Date.parse(approved.expiresAt) : Infinity)).toISOString();
         const result = { ...amount, currency: ctx.checkout.currency, code, expiresAt, checkoutUrl: policy.checkoutUrl(snapshot.checkoutUrl, shop, code),
             cartHash: policy.cartHash(snapshot), simulated: shop.mode === 'simulation',
             ...(approved ? { discountId: approved.id,discountFingerprint: approved.fingerprint } : {}) };
@@ -452,7 +452,7 @@ async function authorizeLink(client, call, shop, ctx, discountProof, useDiscount
         await discounts.assertApproved(client,shop,discountProof,ctx.checkout.subtotal_cents);
         if (discountProof.id!==offer.discountId || discountProof.fingerprint!==offer.discountFingerprint ||
             discountProof.code!==offer.code || discountProof.percent!==offer.percent ||
-            new Date(offer.expiresAt)>new Date(discountProof.expiresAt)) throw policy.problem('valid_offer_required',409);
+            (discountProof.expiresAt!==null && new Date(offer.expiresAt)>new Date(discountProof.expiresAt))) throw policy.problem('valid_offer_required',409);
     }
     // Speech must precede the user's response and belong to the current confirmed offer.
     // Its meaning is interpreted by GPT Live; interrupted speech cannot establish an offer review.

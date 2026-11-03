@@ -88,7 +88,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
     await t.test('merchant validation and tenant isolation reject requests before Shopify is called',async () => {
         const f = await fixture(),other = await fixture(),before = mutationCount;
         for (const change of [{percent: 101},{percent: 0},{code: 'lowercase'},{title: ''},{minSubtotalCents: -1},
-            {usageLimit: 2147483648},{usageLimit: 0},{validDays: 0},{validDays: 0.5},{validDays: 2147483647},{requestId: 'bad'},{unexpected: true}]) {
+            {usageLimit: 2147483648},{usageLimit: 0},{usageLimit: undefined},{usageLimit: ''},{validDays: undefined},{validDays: ''},{validDays: 0},{validDays: 0.5},{validDays: 2147483647},{requestId: 'bad'},{unexpected: true}]) {
             await assert.rejects(discounts.create(f.customerId,f.shopId,{ ...f.input,...change }),/invalid_discount_rules/);
         }
         await assert.rejects(discounts.create(other.customerId,f.shopId,f.input),/shop_not_found/);
@@ -119,6 +119,32 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         }
         actual.minimumRequirement = {__typename:'DiscountMinimumSubtotal',greaterThanOrEqualToSubtotal:{amount:'0.00',currencyCode:'USD'}};
         assert.equal((await discounts.verify(f.shop,approved.id,100)).code,'EXTRA10');
+    });
+    await t.test('unlimited codes stay verified and yield bounded offers and discount links',async () => {
+        const f=await fixture(),input={...f.input,minSubtotalCents:0,validDays:null,usageLimit:null};
+        const approved=(await discounts.create(f.customerId,f.shopId,input)).discount;
+        assert.equal(approved.expiresAt,null); assert.equal(approved.usageLimit,null); assert.equal(approved.status,'confirmed');
+        const row=(await db.query('SELECT * FROM recovery_discounts WHERE id=$1',[approved.id])).rows[0];
+        assert.equal(row.valid_days,null); assert.equal(row.expires_at,null); assert.equal(row.usage_limit,null);
+        const actual=remote.get(row.shopify_id).node.codeDiscount;
+        assert.equal(actual.endsAt,null); assert.equal(actual.usageLimit,null);
+        actual.asyncUsageCount=100000;
+        assert.equal((await discounts.available(f.shop,100))[0].id,approved.id);
+        const original=structuredClone(actual);
+        for(const change of [d=>{d.endsAt=undefined;},d=>{d.endsAt=new Date(Date.now()+86400000).toISOString();},
+            d=>{d.usageLimit=100001;},d=>{d.usageLimit=undefined;},d=>{d.asyncUsageCount=-1;}]) {
+            change(actual);await assert.rejects(discounts.verify(f.shop,approved.id,100),/discount_not_available/);
+            Object.assign(actual,structuredClone(original));
+        }
+        assert.deepEqual((await discounts.create(f.customerId,f.shopId,input)).discount,approved);
+        await assert.rejects(discounts.create(f.customerId,f.shopId,{...input,validDays:7}),/discount_request_reused/);
+        const call=await caller(f),offer=await service.getOffer(call,0,approved.id);
+        assert.ok(Date.parse(offer.expiresAt)>Date.now());assert.ok(Date.parse(offer.expiresAt)<=Date.now()+86400000);
+        await service.recordTranscript(call,{role:'assistant',eventId:randomUUID(),text:'Du bekommst mit RETURN10 zehn Prozent Rabatt.'});
+        await service.recordTranscript(call,{role:'user',eventId:randomUUID(),text:'Ja, gerne. Schick mir den Link mit diesem Rabatt.'});
+        const before=sms.mock.calls.length;
+        assert.equal((await sendLink(call,true)).status,'accepted');
+        assert.equal(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).searchParams.get('discount'),'RETURN10');
     });
     await t.test('merchant terms can exceed old defaults while explicit shop limits remain binding',async () => {
         const f = await fixture();

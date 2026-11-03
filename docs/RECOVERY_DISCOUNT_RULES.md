@@ -1,6 +1,6 @@
 # Merchant discount terms
 
-A shop without explicit discount policy overrides now permits merchant-created percentage codes from 1 to 100 percent and a minimum subtotal of zero. Existing explicit shop-wide rules are preserved. The 30-day and 1,000-redemption defaults are no longer ceilings; validity must end within a four-digit ISO date year, and redemption counts must fit Shopify's positive GraphQL Int range. Values are validated in the form action, API and database.
+A shop without explicit discount policy overrides now permits merchant-created percentage codes from 1 to 100 percent and a minimum subtotal of zero. Existing explicit shop-wide rules are preserved. The 30-day and 1,000-redemption defaults are no longer ceilings; validity must end within a four-digit ISO date year, and redemption counts must fit Shopify's positive GraphQL Int range. Empty validity/redemption fields explicitly mean unbounded (`null` in the API and database). Values are validated in the form action, API and database. Non-expiring discounts still use bounded cart proposals and offer snapshots, so stale prices cannot be reused.
 
 Zero minimum omits `minimumRequirement` in Shopify creation. Verification accepts Shopify's explicit null or a zero-subtotal requirement only for a stored zero-minimum code. Positive minimums, currency, percentage, code, expiry, usage, customer scope and combinability still have to match exactly. See [Shopify DiscountCodeBasicInput](https://shopify.dev/docs/api/admin-graphql/latest/input-objects/DiscountCodeBasicInput).
 

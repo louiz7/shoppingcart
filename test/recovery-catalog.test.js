@@ -83,6 +83,16 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
     async function review(call,text='Ein schwarzes Shirt in M für 80 Euro, statt des alten Artikels. Soll ich dir diesen Checkout per SMS senden?'){
         await service.recordTranscript(call,{eventId:randomUUID(),role:'assistant',text});return user(call);
     }
+    await t.test('a non-expiring discount still produces a finite checkout proposal',async()=>{
+        const previous=proof.expiresAt;proof.expiresAt=null;
+        try {
+            const f=await fixture(),prepared=await catalog.prepareCheckout(f.call,items,discountId);
+            assert.ok(Date.parse(prepared.expiresAt)>Date.now());
+            assert.ok(Date.parse(prepared.expiresAt)<=Date.now()+30*60000);
+            const verified=await catalog.verifyProposal(f.call,prepared.preparedCheckoutId,true);
+            assert.equal(verified.discount.expiresAt,null);
+        } finally {proof.expiresAt=previous;}
+    });
     await t.test('knowledge tools use the call tenant and reject revoked permission even during a lookup',async sub=>{
         const knowledge=require('../src/recovery/knowledge'),f=await fixture(),other=await fixture();
         const read=sub.mock.method(knowledge,'product',async(s,id)=>{
