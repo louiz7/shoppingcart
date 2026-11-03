@@ -16,6 +16,12 @@ from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('sales_no_questions_de', False, [('assistant','Hast du noch Fragen zu den Produkten?'),('user','Eigentlich habe ich keine Fragen.')], 'no_tools', None),
+    ('sales_no_questions_en', False, [('assistant','Do you have any questions about the product?'),('user',"No, I don't really have any questions.")], 'no_tools', None),
+    ('sales_no_questions_price', False, [('user','Fragen habe ich keine, der Preis war mir einfach zu hoch.')], 'get_offer', None),
+    ('sales_no_questions_ready', False, [('user','Keine Fragen mehr, schick mir einfach den Checkout per SMS.')], 'send_checkout_link', False),
+    ('sales_no_questions_clear', False, [('assistant','Was hat dich bisher vom Kauf abgehalten?'),('user','Nichts mehr, ich war nur abgelenkt und würde es jetzt nehmen.')], 'no_tools', None),
+    ('sales_no_questions_stop', False, [('user','Keine Fragen. Ich möchte das nicht kaufen und will das Gespräch jetzt beenden.')], 'stop_contact', None),
     ('price_first_de', False, [('user','Das ist mir zu teuer.')], 'get_offer', None),
     ('price_first_en', False, [('user','That costs more than I wanted to spend.')], 'get_offer', None),
     ('price_still_high', True, [('assistant','Mit den zehn Prozent kostet das Shirt 90 Euro.'),('user','Auch 90 Euro ist zu teuer. Such mir bitte etwas Ähnliches bis 70 Euro.')], 'search_products', None),

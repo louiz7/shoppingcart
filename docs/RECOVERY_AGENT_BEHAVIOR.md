@@ -118,3 +118,12 @@ Following the [official GPT-Live prompting guide](https://developers.openai.com/
 The voice layer retains the required order for price objections (approved discount, customer response, then alternatives), verified product identity, natural acceptance before a discounted link, no unsolicited messages, respect for thinking time and durable contact stops. Separate backchannel, interruption and delegation sections distinguish brief listening cues from repetitive acknowledgements and work announcements. They permit conversational variation without a mandatory question or fixed answer length.
 
 Verification: 21 offline SDK checks passed, and a direct comparison confirmed the resolved backend instructions are identical. Review covered the assembled demo/phone identity and language prompts, all retained conversational requirements and the existing tool boundaries. The existing reasoning-model evaluations would not test the changed voice layer, so they were not rerun as evidence of spoken naturalness. The owner will perform the listening test after deployment.
+
+
+## Lead from “no questions” to the purchase decision, 2026-11-03
+
+Both prompt layers now explicitly treat “no questions” alone as an opportunity to ask what has prevented the purchase. Known objections are addressed directly instead of asked for again; if nothing remains unresolved, the agent offers checkout. The overall conversation keeps a concrete next step toward purchase. Explicit purchase refusal, thinking time and requests to end the conversation still take precedence. This adds no keyword classifier, mandatory wording or new authorization path.
+
+Six synthetic cases cover DE/EN “no questions,” an already-stated price objection, a direct link request, a resolved obstacle and an explicit refusal. Generated replies are inspected for the follow-up question or checkout offer; tool checks separately reject premature sending/stopping and require the approved offer for the price objection. Spoken naturalness remains for a new listening test.
+
+Validation: all 56 reasoning-model cases and 21 offline SDK checks passed. Code/security review checked the two prompt consumers and preserved refusal, discount acceptance and send boundaries. No new voice/audio E2E test was performed.
