@@ -56,6 +56,19 @@
 		<p class="shop-domain">{shop?.domain || ''}</p>
 	</div>
 	<div class="page-title"><h1>Einstellungen</h1><p>Dein Agent und passende Angebote für deinen Shop.</p></div>
+	{#if data.terms}<section class="terms-panel" id="terms" aria-labelledby="terms-heading">
+		<h2 id="terms-heading">Nutzungsbedingungen</h2>
+		<p>Vor dem Live-Start bestätigt ein Admin die Händlerbedingungen für diese Organisation. Die Kontaktberechtigung wird zusätzlich für jeden Kunden geprüft.</p>
+		<a href="/terms" target="_blank" rel="noopener noreferrer">Bedingungen lesen · Version {data.terms.version} ↗</a>
+		{#if form && 'termsError' in form}<p class="terms-error" role="alert">{form.termsError}</p>{/if}
+		{#if data.terms.acceptedAt}<p class="terms-confirmed" role="status">{#if data.terms.source === 'external'}Außerhalb des Dashboards bestätigt. Von Rescova hinterlegt am {date(data.terms.acceptedAt)}.{:else}Bestätigt am {date(data.terms.acceptedAt)} von {data.terms.acceptedBy}.{/if}</p>
+		{:else}<form method="POST" action="?/acceptTerms" use:enhance>
+			<input type="hidden" name="version" value={data.terms.version} /><input type="hidden" name="hash" value={data.terms.hash} />
+			<label><input type="checkbox" name="accepted" required disabled={!data.canEdit} /><span>{data.terms.acceptance}</span></label>
+			<button class="primary" disabled={!data.canEdit}>Verbindlich bestätigen</button>
+			{#if !data.canEdit}<p>Bitte wende dich dafür an einen Admin deiner Organisation.</p>{/if}
+		</form>{/if}
+	</section>{/if}
 	{#if data.loadError}
 		<div class="notice" role="alert"><p>{data.loadError}</p><a href="/recovery/settings">Erneut laden</a></div>
 	{:else if !shop}
@@ -155,6 +168,7 @@
 </RecoveryShell>
 
 <style>
+	.terms-panel{padding:24px;border:1px solid var(--border);border-radius:8px;margin-bottom:32px;scroll-margin-top:24px}.terms-panel h2{font-size:16px;font-weight:500;margin:0}.terms-panel p{font-size:13px;line-height:1.65;color:var(--muted);max-width:760px}.terms-panel a{font-size:13px;color:var(--text);text-underline-offset:4px}.terms-panel label{display:flex;align-items:flex-start;gap:12px;font-size:13px;line-height:1.65;max-width:760px;margin:20px 0}.terms-panel input[type=checkbox]{width:18px;height:18px;flex-shrink:0;margin:3px 0 0;accent-color:var(--accent)}.terms-panel .terms-error{color:var(--negative)}.terms-panel .terms-confirmed{color:var(--accent)}
 	.scope-row{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:24px}.scope-row p{margin:0}.shop-name{font-weight:500}.shop-domain{font-size:13px;color:var(--muted);overflow-wrap:anywhere}.shop-choice{display:flex;align-items:center;gap:12px;font-size:13px}.shop-choice select{height:40px;padding:0 32px 0 12px;background:var(--surface);border:1px solid var(--control);border-radius:6px;color:var(--text);max-width:100%;font:inherit}
 	.page-title{margin-bottom:32px}h1{font-size:24px;line-height:1.3;letter-spacing:-.6px;font-weight:600;margin:0}.page-title p{margin:8px 0 0;color:var(--muted)}h2{font-size:16px;line-height:1.5;font-weight:500;margin:0 0 8px}.section-copy>p{color:var(--muted);margin:0 0 16px;max-width:300px;line-height:1.7}.section-copy .limits{font-size:13px}
 	/* 312px label + 48px gutter + 758px panel = 1118px canvas. */

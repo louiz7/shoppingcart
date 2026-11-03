@@ -21,7 +21,7 @@
 		</div>
 	</header>
 	<main class="app-main">{@render children()}</main>
-	<footer><span>Persönliche Gespräche. Zurück zum Warenkorb.</span><a href="mailto:support@rescova.de">Support kontaktieren <span aria-hidden="true">↗</span></a></footer>
+	<footer><span>Persönliche Gespräche. Zurück zum Warenkorb.</span><a href="/terms">Nutzungsbedingungen</a><a href="mailto:support@rescova.de">Support kontaktieren <span aria-hidden="true">↗</span></a></footer>
 </div>
 
 <style>

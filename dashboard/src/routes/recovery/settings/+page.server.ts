@@ -1,20 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import { fail, redirect, type Actions } from '@sveltejs/kit';
 import { recoveryRequest } from '$lib/server/recovery';
+import { document, termsHash } from '$lib/server/recovery-terms';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, setHeaders }) => {
 	setHeaders({ 'Cache-Control': 'no-store' });
 	try {
-		return { settings: await recoveryRequest(locals.user!.customerId, '/settings'), requestId: randomUUID(),
+		const [settings, acceptance] = await Promise.all([recoveryRequest(locals.user!.customerId, '/settings'), recoveryRequest(locals.user!.customerId, '/terms')]);
+		return { settings, terms: { version: document.version, hash: termsHash, acceptance: document.acceptance, source: acceptance.source,
+			acceptedAt: acceptance.hash === termsHash ? acceptance.acceptedAt : null, acceptedBy: acceptance.hash === termsHash ? acceptance.acceptedBy : null }, requestId: randomUUID(),
 			canEdit: locals.user?.role === 'admin', loadError: null };
 	} catch {
-		return { settings: null, requestId: randomUUID(), canEdit: locals.user?.role === 'admin',
+		return { settings: null, terms: null, requestId: randomUUID(), canEdit: locals.user?.role === 'admin',
 			loadError: 'Die Shopify-Einstellungen konnten nicht geladen werden.' };
 	}
 };
 
 export const actions: Actions = {
+	acceptTerms: async ({ locals, request }) => {
+		const feedback = { error: undefined, success: undefined, values: undefined, uncertain: false };
+		if (locals.user?.role !== 'admin') return fail(403, { ...feedback, termsError: 'Nur ein Admin deiner Organisation kann die Bedingungen bestätigen.' });
+		const input = await request.formData();
+		try {
+			await recoveryRequest(locals.user.customerId, '/terms', { accepted: input.get('accepted') === 'on',
+				version: String(input.get('version') || ''), hash: String(input.get('hash') || '') }, locals.user.id);
+			return { ...feedback, termsSuccess: 'Die Nutzungsbedingungen wurden für deine Organisation bestätigt.' };
+		} catch (error) {
+			const code = error instanceof Error ? error.message : '';
+			return fail(400, { ...feedback, termsError: code === 'terms_version_changed'
+				? 'Die Bedingungen haben sich geändert. Bitte lade die Seite neu und prüfe die aktuelle Version.'
+				: code === 'terms_acceptance_required' ? 'Bitte bestätige die Nutzungsbedingungen ausdrücklich.'
+					: 'Die Bestätigung konnte nicht gespeichert werden. Bitte lade den aktuellen Stand neu.' });
+		}
+	},
 	agentProfile: async ({ locals, request }) => {
 		const feedback = { error: undefined, success: undefined, values: undefined, uncertain: false };
 		if (locals.user?.role !== 'admin') return fail(403, { ...feedback, agentError: 'Nur Händler-Admins können den Agenten anpassen.', agentSuccess: undefined, agentValues: undefined });

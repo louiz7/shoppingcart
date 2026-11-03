@@ -36,6 +36,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
     async function fixture() {
         const shopId = randomUUID(), tenant = await db.query(`INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id`, [`Recovery test ${shopId}`, `${randomUUID()}@example.invalid`]);
         const customerId = tenant.rows[0].id; tenantIds.push(customerId);
+        await require('./helpers/recovery-terms')(db,customerId);
         await db.query(`INSERT INTO recovery_shops(id,customer_id,domain,brand,rules) VALUES($1,$2,$3,'Test shop',$4)`,
         [shopId, customerId, `${shopId}.myshopify.com`, JSON.stringify(p.rules({ maxDiscountPercent: 10, weekdays: [1,2,3,4,5,6,7], start: '00:00', end: '23:59' }))]);
         const shop = await s.shopFor(customerId, shopId);
@@ -187,6 +188,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
             await assert.rejects(s.startCall(f.customerId,f.shopId,f.checkoutId),/abandonment_delay/);
             const result=await s.startCall(f.customerId,f.shopId,f.checkoutId,{ownerTest:true});
             assert.equal(dial.mock.calls.length,before+1);
+            assert.equal(dial.mock.calls[before].arguments[0].shop_id,f.shopId);
             const call=(await db.query('SELECT * FROM recovery_calls WHERE id=$1',[result.id])).rows[0];
             assert.equal(call.is_test,true);
             assert.deepEqual((await db.query('SELECT arm,enrolled_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0],{arm:null,enrolled_at:null});

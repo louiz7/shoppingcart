@@ -35,6 +35,7 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         const id = randomUUID();
         const result = await db.query('INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id', [`Summary ${id}`, `${id}@example.invalid`]);
         customers.push(result.rows[0].id);
+        await require('./helpers/recovery-terms')(db,result.rows[0].id);
         return result.rows[0].id;
     }
     async function shop(customerId, timezone = 'Europe/Berlin', mode = 'live') {

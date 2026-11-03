@@ -39,7 +39,7 @@ const action = (kind: string): Actions[string] => async ({ locals, request }) =>
 		return { success: result.control ? 'Kontrollgruppe: Es wird kein Anruf ausgelöst.' : result.simulated ? 'Simulation ausgeführt. Keine externe Aktion.' : 'Gespeichert.', error: null };
 	} catch (error) {
 		if (error && typeof error === 'object' && 'status' in error && 'location' in error) throw error;
-		return fail(400, { error: error instanceof Error ? error.message : 'Aktion fehlgeschlagen.', success: null });
+		return fail(400, { error: error instanceof Error ? (error.message === 'terms_acceptance_required' ? 'Bitte zuerst unter Einstellungen die Nutzungsbedingungen für diese Organisation bestätigen.' : error.message) : 'Aktion fehlgeschlagen.', success: null });
 	}
 };
 

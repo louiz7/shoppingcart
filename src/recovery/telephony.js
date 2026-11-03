@@ -3,12 +3,33 @@
 const { SipClient, RoomServiceClient, AgentDispatchClient } = require('livekit-server-sdk');
 const { problem, phone } = require('./policy');
 
-function configured() {
-    return ['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'RECOVERY_SIP_TRUNK_ID', 'RECOVERY_CALLER_ID',
-        'LIVEKIT_AGENT_NAME', 'OPENAI_API_KEY'].every((key) => {
-        const value = process.env[key];
-        return value && !/^(replace_|""$|''$)/.test(value);
-    });
+// Only deployment configuration can assign numbers; callers supply the authenticated shop ID.
+function routing(shopId) {
+    let routes;
+    try {
+        routes = JSON.parse(process.env.RECOVERY_SHOP_TELEPHONY || '{}');
+        if (!routes || typeof routes !== 'object' || Array.isArray(routes)) throw new Error();
+        for (const [id,route] of Object.entries(routes)) {
+            if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id) || !route ||
+                typeof route !== 'object' || Array.isArray(route) ||
+                Object.keys(route).some(key=>!['trunkId','callerId','smsFrom'].includes(key)) ||
+                !/^ST_[A-Za-z0-9_]+$/.test(route.trunkId || '') || phone(route.callerId)!==route.callerId ||
+                (route.smsFrom !== undefined && phone(route.smsFrom)!==route.smsFrom)) throw new Error();
+        }
+    } catch { throw problem('shop_telephony_not_configured',503); }
+    const route = Object.hasOwn(routes,shopId) ? routes[shopId] : null;
+    return { trunkId:route?.trunkId || process.env.RECOVERY_SIP_TRUNK_ID,
+        callerId:route?.callerId || process.env.RECOVERY_CALLER_ID,
+        smsFrom:route?.smsFrom || process.env.TWILIO_SMS_FROM };
+}
+
+function configured(shopId) {
+    try {
+        const route=routing(shopId);
+        return ['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_AGENT_NAME', 'OPENAI_API_KEY']
+            .map(key=>process.env[key]).concat([route.trunkId,route.callerId])
+            .every(value=>value && !/^(replace_|""$|''$)/.test(value));
+    } catch { return false; }
 }
 
 function clients() {
@@ -18,16 +39,17 @@ function clients() {
 }
 
 async function dial(call, number, token) {
-    if (process.env.RECOVERY_LIVE_ENABLED !== '1' || !configured()) throw problem('live_calls_disabled', 409);
+    if (process.env.RECOVERY_LIVE_ENABLED !== '1' || !configured(call.shop_id)) throw problem('live_calls_disabled', 409);
     const { rooms, sip, dispatch } = clients();
+    const route = routing(call.shop_id);
     // Named dispatch keeps this worker out of existing Rescova campaigns.
     await rooms.createRoom({ name: call.room, emptyTimeout: 30, maxParticipants: 2,
         metadata: JSON.stringify({ mode: 'recovery', call_token: token }) });
     try {
         await dispatch.createDispatch(call.room, process.env.LIVEKIT_AGENT_NAME);
-        return await sip.createSipParticipant(process.env.RECOVERY_SIP_TRUNK_ID, number, call.room, {
+        return await sip.createSipParticipant(route.trunkId, number, call.room, {
             participantIdentity: `buyer-${call.id}`, participantName: 'Shop customer',
-            fromNumber: process.env.RECOVERY_CALLER_ID, waitUntilAnswered: false,
+            fromNumber: route.callerId, waitUntilAnswered: false,
         });
     } catch (error) {
         await rooms.deleteRoom(call.room).catch(() => {});
@@ -40,13 +62,13 @@ async function hangup(room) {
     await clients().rooms.deleteRoom(room);
 }
 
-function assertSmsReady() {
+function assertSmsReady(shopId) {
     const unavailable = (code, status) => Object.assign(problem(code, status), { smsDispatched: false });
     if (process.env.RECOVERY_LIVE_ENABLED !== '1' || process.env.RECOVERY_SMS_ENABLED !== '1') throw unavailable('sms_disabled', 409);
     const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN;
     let sender, callback;
     try {
-        sender = phone(process.env.TWILIO_SMS_FROM);
+        sender = phone(routing(shopId).smsFrom);
         callback = new URL('/webhooks/recovery/twilio', process.env.RECOVERY_PUBLIC_URL);
         if (callback.protocol !== 'https:' || callback.username || callback.password || callback.port) throw new Error();
     } catch { throw unavailable('sms_not_configured', 503); }
@@ -54,8 +76,8 @@ function assertSmsReady() {
     return { sid, token, sender, callback };
 }
 
-async function sendSms(number, text, actionId) {
-    const { sid, token, sender, callback } = assertSmsReady();
+async function sendSms(number, text, actionId, shopId) {
+    const { sid, token, sender, callback } = assertSmsReady(shopId);
     try {
         if (phone(number) !== number || !/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(actionId || '') ||
             typeof text !== 'string' || !text.trim() || text.length > 1600) throw new Error();

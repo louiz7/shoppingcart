@@ -40,6 +40,7 @@ test('deployment pause serializes with new call reservations without ending exis
     async function fixture(){
         const id=randomUUID(),tenant=await db.query('INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id',[`Deployment ${id}`,`${id}@example.invalid`]);
         const customerId=tenant.rows[0].id;tenantIds.push(customerId);
+        await require('./helpers/recovery-terms')(db,customerId);
         const rules=policy.rules({weekdays:[1,2,3,4,5,6,7],start:'00:00',end:'23:59'});
         const shop=(await db.query(`INSERT INTO recovery_shops(id,customer_id,domain,brand,mode,enabled,approved_at,webhooks_ready,rules)
             VALUES($1,$2,$3,'Synthetic deploy','live',TRUE,NOW(),TRUE,$4) RETURNING *`,[id,customerId,`${id}.myshopify.com`,rules])).rows[0];

@@ -73,6 +73,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         const customerId = (await db.query('INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id',
             [`SMS test ${shopId}`, `${shopId}@example.invalid`])).rows[0].id;
         tenants.push(customerId);
+        await require('./helpers/recovery-terms')(db,customerId);
         await db.query(`INSERT INTO recovery_shops(id,customer_id,domain,brand,currency) VALUES($1,$2,$3,'Test shop','USD')`,
             [shopId, customerId, `${shopId}.myshopify.com`]);
         const shop = await service.shopFor(customerId, shopId);
@@ -121,6 +122,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         assert.deepEqual(await sendArticle(),{status:'accepted',duplicate:true});
         assert.equal(send.mock.calls.length,before+1);
         assert.equal(send.mock.calls[before].arguments[0],f.snapshot.phone);
+        assert.equal(send.mock.calls[before].arguments[3],f.shopId);
         assert.equal(send.mock.calls[before].arguments[1],'Test shop: Hier ist der gewünschte Hilfeartikel: https://support.deskspace.de/hc/de/articles/1');
         const action=(await db.query("SELECT data FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'",[f.checkoutId])).rows[0].data;
         assert.equal(action.messageType,'help_article');assert.equal(action.checkoutUrl,undefined);assert.equal(action.proposalId,undefined);

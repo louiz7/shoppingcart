@@ -7,6 +7,7 @@ const shopify = require('./shopify');
 const telephony = require('./telephony');
 const discounts = require('./discounts');
 const agentProfile = require('./agent-profile');
+const terms = require('./terms');
 const { TwirpError } = require('livekit-server-sdk');
 
 const hash = (text) => createHash('sha256').update(text).digest('hex');
@@ -14,8 +15,10 @@ const uuid = (value) => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4})
 
 async function shopFor(customerId, shopId, executor = db, lock = false) {
     if (!uuid(shopId)) throw policy.problem('shop_not_found', 404);
-    const { rows } = await executor.query(`SELECT s.* FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
-        WHERE s.id=$1 AND s.customer_id=$2 AND c.is_active ${lock ? 'FOR UPDATE OF s' : ''}`, [shopId, customerId]);
+    const { rows } = await executor.query(`SELECT s.*,EXISTS(SELECT 1 FROM recovery_terms_acceptances a
+        WHERE a.customer_id=s.customer_id AND a.version=$3 AND a.document_hash=$4) AS terms_current
+        FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
+        WHERE s.id=$1 AND s.customer_id=$2 AND c.is_active ${lock ? 'FOR UPDATE OF s' : ''}`, [shopId, customerId,terms.document.version,terms.hash]);
     if (!rows[0]) throw policy.problem('shop_not_found', 404);
     return rows[0];
 }
@@ -42,6 +45,7 @@ async function saveSettings(customerId, shopId, input) {
     }
     return transaction(async (client) => {
         const shop = await shopFor(customerId, shopId, client, true);
+        if (input.enabled && shop.mode === 'live' && !shop.terms_current) throw policy.problem('terms_acceptance_required',409);
         if (input.enabled && shop.mode === 'live' && !shop.webhooks_ready) throw policy.problem('webhooks_not_ready', 409);
         if (input.enabled && input.approval !== true && !shop.approved_at) throw policy.problem('explicit_merchant_approval_required');
         await client.query(`UPDATE recovery_shops SET brand=$3,brand_voice=$4,rules=$5,enabled=$6,
@@ -174,7 +178,7 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
         const denied = policy.eligibility(ctx,new Date(),'call',ownerTest);
         if (denied) throw policy.problem(denied, 409);
         if (shop.mode === 'live' && !shop.webhooks_ready) throw policy.problem('webhooks_not_ready', 409);
-        if (shop.mode === 'live' && (process.env.RECOVERY_LIVE_ENABLED !== '1' || !telephony.configured())) {
+        if (shop.mode === 'live' && (process.env.RECOVERY_LIVE_ENABLED !== '1' || !telephony.configured(shop.id))) {
             throw policy.problem('live_calls_disabled', 409);
         }
         // shortcut: one active call per shop in the pilot; widen with a tested budgeted scheduler.
@@ -190,7 +194,7 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
             await event(client, shop.id, 'simulation_call', { checkoutId, noExternalAction: true }, id);
             return { simulated: true, id };
         }
-        return { id, room, token,number: ctx.checkout.phone,contactKey: ctx.checkout.contact_key };
+        return { id, room, token,shop_id:shop.id,number: ctx.checkout.phone,contactKey: ctx.checkout.contact_key };
     });
     if (reservation.control || reservation.simulated) return reservation;
     // The intent is durable before contacting the provider. Ambiguous failures never auto-retry.
@@ -496,7 +500,7 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
         const { rows: prior } = await client.query(`SELECT status FROM recovery_actions WHERE checkout_id=$1 AND kind='sms'
             AND COALESCE(data->>'targetKey','original')=$2`, [call.checkout_id,authorization?.targetKey || 'original']);
         if (prior[0]) return { duplicate: true, status: prior[0].status };
-        if (shop.mode === 'live') telephony.assertSmsReady();
+        if (shop.mode === 'live') telephony.assertSmsReady(shop.id);
         const confirmed = authorization || await authorizeLink(client, call, shop, ctx, initialDiscountProof, useDiscount, userEventId);
         const count = await client.query(`SELECT COUNT(*)::int AS n,
             COUNT(*) FILTER (WHERE data->>'messageType'='help_article')::int AS help_count
@@ -528,7 +532,7 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
                 `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
         });
         dispatched = true;
-        const sent = await telephony.sendSms(action.number, text, action.id);
+        const sent = await telephony.sendSms(action.number, text, action.id, call.shop_id);
         const status = await transaction(async (client) => {
             const { rows } = await client.query('SELECT status,provider_id FROM recovery_actions WHERE id=$1 FOR UPDATE', [action.id]);
             const { rows: receipts } = await client.query(`SELECT status FROM recovery_sms_receipts WHERE action_id=$1 AND provider_id=$2`, [action.id, sent.id]);
@@ -622,7 +626,7 @@ async function dashboard(customerId) {
         costs: cost.length === 1 ? cost[0] : { cents: cost.length ? null : 0, missing: cost.reduce((n,c) => n+c.missing,0), currency: null },
         costsByCurrency: cost, liveEnabled: process.env.RECOVERY_LIVE_ENABLED === '1',
         configured: { shopify: !!process.env.SHOPIFY_CLIENT_ID && !!process.env.SHOPIFY_CLIENT_SECRET,
-            telephony: telephony.configured(), sms: process.env.RECOVERY_SMS_ENABLED === '1', browserDemo: process.env.GPT_LIVE_DEMO_ENABLED === '1',
+            telephony: shops.some(shop => telephony.configured(shop.id)), sms: process.env.RECOVERY_SMS_ENABLED === '1', browserDemo: process.env.GPT_LIVE_DEMO_ENABLED === '1',
             testShopDomain: process.env.RECOVERY_TEST_SHOP_DOMAIN || '' },
     };
 }

@@ -71,6 +71,7 @@ function inWindow(policy, timezone, now) {
 function eligibility({ shop, checkout, contact, attempts = [], active = false }, now = new Date(), action = 'call', ownerTest = false) {
     const p = rules(shop.rules);
     if (!shop.enabled || !shop.approved_at) return 'merchant_not_approved';
+    if (shop.mode === 'live' && shop.terms_current !== true) return 'terms_acceptance_required';
     if (checkout.completed_at || checkout.status === 'converted') return 'already_purchased';
     if (['stopped', 'expired'].includes(checkout.status) || contact?.stopped_at) return 'contact_stopped';
     if (!contact?.consented_at || !contact.evidence || contact.revoked_at || !contact.expires_at ||

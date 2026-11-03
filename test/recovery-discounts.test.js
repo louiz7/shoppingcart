@@ -57,6 +57,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         const shopId = randomUUID(),customerId = (await db.query('INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id',
             [`Discounts ${shopId}`,`${shopId}@example.invalid`])).rows[0].id;
         tenants.push(customerId);
+        await require('./helpers/recovery-terms')(db,customerId);
         const shop = (await db.query(`INSERT INTO recovery_shops(id,customer_id,domain,brand,mode,currency,rules,enabled,approved_at)
             VALUES($1,$2,$3,'Synthetic shop','live','USD',$4,TRUE,NOW()) RETURNING *`,
         [shopId,customerId,`${shopId}.myshopify.com`,JSON.stringify(policy.rules())])).rows[0];

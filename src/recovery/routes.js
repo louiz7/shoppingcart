@@ -92,6 +92,8 @@ function merchantRouter() {
     router.get('/', handle(async (req, res) => res.json(await service.dashboard(req.customer.id))));
     router.get('/summary', handle(async (req, res) => res.json(await service.dailySummary(req.customer.id))));
     router.get('/settings', handle(async (req, res) => res.json(await require('./discounts').settings(req.customer.id))));
+    router.get('/terms', handle(async (req,res)=>res.json(await require('./terms').status(req.customer.id))));
+    router.post('/terms', handle(async (req,res)=>res.json(await require('./terms').accept(req.customer.id,req.get('x-user-id'),req.body))));
     router.post('/shops/:shopId/agent-profile', handle(async (req, res) => res.json(await service.updateAgentProfile(req.customer.id, req.params.shopId, req.body, req.get('x-user-id')))));
     router.post('/:shopId/discounts', handle(async (req, res) => res.json(await require('./discounts').create(req.customer.id,req.params.shopId,req.body))));
     router.post('/oauth', handle(async (req, res) => res.json(await startOAuth(req.customer.id, req.body.domain))));

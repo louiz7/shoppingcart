@@ -1,0 +1,34 @@
+{
+  "version": "2026-11-03.1",
+  "title": "Nutzungsbedingungen für Händler",
+  "provider": "Rescova GmbH i.G.",
+  "address": "Donaustrasse 44, 12043 Berlin",
+  "email": "support@rescova.de",
+  "sections": [
+    {
+      "title": "1. Geltung und Leistung",
+      "text": "Diese Bedingungen gelten für Unternehmer, die Rescova zur KI-gestützten Kundenansprache im Auftrag ihres Shops nutzen. Leistungsumfang, Vergütung, Laufzeit und Kündigung richten sich nach dem individuellen Vertrag. Ein bestimmter Umsatz, eine Abschlussquote oder ein sonstiger wirtschaftlicher Erfolg wird nicht zugesichert. Individuelle Vereinbarungen haben Vorrang."
+    },
+    {
+      "title": "2. Verantwortung für Kontaktberechtigungen",
+      "text": "Der Händler ist für die rechtmäßige Auswahl und Freigabe der von ihm bereitgestellten Kontakte verantwortlich. Er stellt vor jeder Freigabe sicher, dass sämtliche erforderlichen Einwilligungen und sonstigen Rechtsgrundlagen für Kontaktzweck, Kontaktkanal und den Einsatz automatisierter KI-Anrufe vorliegen. Er erfüllt die ihm obliegenden Informationspflichten, dokumentiert Zeitpunkt, Inhalt und Herkunft der Einwilligungen und bewahrt die Nachweise nach den gesetzlichen Vorgaben auf. Auf begründete Anfrage stellt er Rescova diese unverzüglich bereit. Eine Telefonnummer im Checkout, ein Warenkorbabbruch oder die Zustimmung zu diesen Bedingungen ersetzt keine erforderliche Einwilligung des Endkunden."
+    },
+    {
+      "title": "3. Widerrufe, Sperren und Händlerangaben",
+      "text": "Der Händler übermittelt Widerrufe, Widersprüche und Kontaktsperren unverzüglich und gibt gesperrte Kontakte nicht erneut frei. Er verantwortet die Richtigkeit, Aktualität und Rechtmäßigkeit seiner Produktinformationen, Wissensquellen, Angebote, Rabattregeln und Gesprächsvorgaben sowie die erforderlichen Nutzungsrechte. Er prüft die vereinbarte Konfiguration vor dem Produktivstart, genehmigt sie ausdrücklich und meldet erkannte Fehler unverzüglich. Rescova setzt technisch erfasste Kontaktsperren nach Maßgabe der vereinbarten Leistung um."
+    },
+    {
+      "title": "4. Datenschutz und Betrieb",
+      "text": "Soweit personenbezogene Daten im Auftrag verarbeitet werden, schließen die Parteien vor Produktivbetrieb eine gesonderte Vereinbarung zur Auftragsverarbeitung. Der Händler erfüllt die ihm als Verantwortlichem obliegenden Pflichten und erteilt rechtmäßige Weisungen. Rescova behält seine eigenen gesetzlichen Pflichten, insbesondere zu Datenschutz, Sicherheit und Transparenz. Bei konkreten Anhaltspunkten für einen rechtswidrigen Kontaktlauf oder fehlende Nachweise darf Rescova den betroffenen Betrieb bis zur Klärung verhältnismäßig aussetzen und informiert den Händler über den Grund."
+    },
+    {
+      "title": "5. Freistellung bei Pflichtverletzungen des Händlers",
+      "text": "Der Händler stellt Rescova von berechtigten Ansprüchen Dritter und erforderlichen, angemessenen Rechtsverteidigungskosten frei, soweit diese auf einer vom Händler zu vertretenden Verletzung der vorstehenden Pflichten beruhen. Eine Mitverantwortung von Rescova wird entsprechend berücksichtigt. Rescova informiert den Händler unverzüglich über geltend gemachte Ansprüche und ermöglicht ihm eine angemessene Mitwirkung an der Rechtsverteidigung. Anerkenntnisse und Vergleiche zulasten des Händlers bedürfen dessen vorheriger Zustimmung, die nicht unbillig verweigert werden darf."
+    },
+    {
+      "title": "6. Haftung von Rescova",
+      "text": "Rescova haftet unbeschränkt bei Vorsatz, grober Fahrlässigkeit, Verletzung von Leben, Körper oder Gesundheit sowie aufgrund zwingender gesetzlicher Vorschriften. Gleiches gilt im Umfang einer ausdrücklich übernommenen Garantie und bei arglistigem Verschweigen eines Mangels. Bei einfacher Fahrlässigkeit haftet Rescova für die Verletzung wesentlicher Vertragspflichten, deren Erfüllung die ordnungsgemäße Vertragsdurchführung erst ermöglicht und auf deren Einhaltung der Händler regelmäßig vertrauen darf, begrenzt auf den vorhersehbaren, vertragstypischen Schaden. Im Übrigen ist die Haftung für einfache Fahrlässigkeit ausgeschlossen. Gesetzlich nicht abdingbare Ansprüche und Pflichten bleiben unberührt."
+    }
+  ],
+  "acceptance": "Ich akzeptiere die Nutzungsbedingungen in dieser Version für meine Organisation und bestätige, hierzu berechtigt zu sein. Ich übernehme die darin beschriebenen Händlerpflichten, insbesondere die Beschaffung und Dokumentation erforderlicher Einwilligungen sowie die Pflege von Kontaktsperren und Shop-Inhalten."
+}

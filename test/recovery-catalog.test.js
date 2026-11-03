@@ -63,6 +63,7 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
     async function fixture(){
         const shopId=randomUUID(),customerId=(await db.query('INSERT INTO customers(name,email) VALUES($1,$2) RETURNING id',[`Catalog test ${shopId}`,`${shopId}@example.invalid`])).rows[0].id;
         tenants.push(customerId);
+        await require('./helpers/recovery-terms')(db,customerId);
         await db.query(`INSERT INTO recovery_shops(id,customer_id,domain,brand,currency) VALUES($1,$2,$3,'Test','EUR')`,[shopId,customerId,`${shopId}.myshopify.com`]);
         const shop=await service.shopFor(customerId,shopId),snapshot={id:'gid://shopify/AbandonedCheckout/123',updatedAt:new Date(Date.now()-7200000).toISOString(),
             completedAt:null,phone:'+4900000000001',currency:'EUR',subtotalCents:10000,discountCodes:[],checkoutUrl:`https://${shop.domain}/checkouts/original`,
