@@ -65,7 +65,8 @@
     onDestroy(() => { void stop(); });
 </script>
 
-<svelte:head><title>Rescova · Agent ausprobieren</title><meta name="robots" content="noindex,nofollow" /><meta name="description" content="Sprich mit dem aktuellen Rescova-Agenten über einen echten Testwarenkorb." /></svelte:head>
+<!-- Same-origin form POSTs need Origin; external requests still send no referrer. -->
+<svelte:head><meta name="referrer" content="same-origin" /><title>Rescova · Agent ausprobieren</title><meta name="robots" content="noindex,nofollow" /><meta name="description" content="Sprich mit dem aktuellen Rescova-Agenten über einen echten Testwarenkorb." /></svelte:head>
 <main class="demo-page">
     <header><a class="wordmark" href="/demo" aria-label="Rescova Demo">rescova<span>.</span></a><a class="login" href="/login">Zum Dashboard <span aria-hidden="true">↗</span></a></header>
     <div class="intro"><div><p class="eyebrow">Rescova / KI-Demo</p><h1>Ausprobieren.<br /><span>Einfach sprechen.</span></h1></div><p>Du bist der Kunde. Unser Agent hilft dir weiter — mit den Produkten aus dem aktuellen Testwarenkorb.</p></div>

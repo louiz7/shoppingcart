@@ -7,6 +7,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 // Exercises the built SvelteKit route and hooks, using only a synthetic visitor password.
 const password = `demo-only<&"'><script>bad()</script>`;
 async function check(enabled) {
+    const api = createServer((_request, response) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ brand: 'Test', cart: null })); });
+    api.listen(0, '127.0.0.1');
+    await once(api, 'listening');
     const reservation = createServer();
     reservation.listen(0, '127.0.0.1');
     await once(reservation, 'listening');
@@ -14,7 +17,7 @@ async function check(enabled) {
     await new Promise(resolve => reservation.close(resolve));
     const origin = `http://127.0.0.1:${port}`;
     const child = spawn(process.execPath, ['dashboard/build/index.js'], {
-        env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), ORIGIN: origin, RECOVERY_ONLY: '1', RECOVERY_BROWSER_DEMO_ENABLED: enabled ? '1' : '0', SHOPIFY_STOREFRONT_PASSWORD: password },
+        env: { ...process.env, HOST: '127.0.0.1', PORT: String(port), ORIGIN: origin, RECOVERY_API_URL: `http://127.0.0.1:${api.address().port}`, RECOVERY_ONLY: '1', RECOVERY_BROWSER_DEMO_ENABLED: enabled ? '1' : '0', SHOPIFY_STOREFRONT_PASSWORD: password },
         stdio: 'ignore'
     });
     const exited = once(child, 'exit');
@@ -25,6 +28,11 @@ async function check(enabled) {
         }
         assert.ok(ready, 'dashboard starts');
         const request = (options = {}, path = '/demo/unlock') => fetch(origin + path, { redirect: 'manual', ...options });
+        const page = await request({}, '/demo');
+        assert.equal(page.status, 200);
+        const pageHtml = await page.text();
+        assert.match(pageHtml, /<meta name="referrer" content="same-origin"/, 'same-origin form navigation retains Origin even behind the proxy referrer policy');
+        assert.ok(!pageHtml.includes('demo-only'), 'normal demo HTML does not expose the password');
         const get = await request();
         assert.equal(get.status, 405, 'GET cannot disclose the visitor password');
         const foreign = await request({ method: 'POST', headers: { origin: 'https://other.example' } });
@@ -49,6 +57,7 @@ async function check(enabled) {
     } finally {
         child.kill('SIGTERM');
         await exited;
+        await new Promise(resolve => api.close(resolve));
     }
 }
 await check(true);
