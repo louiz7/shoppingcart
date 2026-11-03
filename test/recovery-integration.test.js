@@ -375,6 +375,9 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         for (const percent of [10,100]) await assert.rejects(s.getOffer(call,percent),/approved_discount_required/);
         assert.equal(discount.mock.calls.length,before);
         assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1',[f.checkoutId])).rows[0].n,0);
+        await db.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'offer','confirmed',$3)`,
+            [randomUUID(),f.checkoutId,{percent:10,code:'LEGACY10'}]);
+        await assert.rejects(s.getOffer(call,0),/approved_discount_required/);
     });
 
     await t.test('concurrent link requests send once and never claim delivery from provider acceptance', async () => {

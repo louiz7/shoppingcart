@@ -368,6 +368,7 @@ async function getOffer(call, percent, discountId) {
         if (approved) await discounts.assertApproved(client,shop,approved,ctx.checkout.subtotal_cents);
         const { rows } = await client.query(`SELECT * FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [call.checkout_id]);
         if (rows[0]) {
+            if (shop.mode === 'live' && rows[0].data.percent && !approved) throw policy.problem('approved_discount_required',409);
             if (!['confirmed', 'simulated'].includes(rows[0].status) || new Date(rows[0].data.expiresAt) <= new Date() ||
                 rows[0].data.cartHash !== policy.cartHash(snapshot) ||
                 rows[0].data.percent > policy.rules(shop.rules).maxDiscountPercent ||
