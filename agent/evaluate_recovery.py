@@ -16,6 +16,13 @@ from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('price_first_de', False, [('user','Das ist mir zu teuer.')], 'get_offer', None),
+    ('price_first_en', False, [('user','That costs more than I wanted to spend.')], 'get_offer', None),
+    ('price_still_high', True, [('assistant','Mit den zehn Prozent kostet das Shirt 90 Euro.'),('user','Auch 90 Euro ist zu teuer. Such mir bitte etwas Ähnliches bis 70 Euro.')], 'search_products', None),
+    ('price_explicit_alternative', False, [('user','Das Shirt möchte ich nicht. Such mir bitte stattdessen eine Jacke, keinen Rabatt auf das Shirt.')], 'search_products', None),
+    ('price_no_offer', False, [('user','Das ist mir zu teuer. Gibt es dafür einen Rabatt?')], 'no_tools', None),
+    ('product_identity_correction', False, [('assistant','Die Snowboardjacke passt gut dazu.'),('user','Wie heißt der Artikel in meinem Warenkorb genau?')], 'no_tools', None),
+    ('product_identity_attributes', False, [('user','Kannst du mir versichern, dass das wasserdicht ist?')], 'no_tools', None),
     ('sales_compare_de', False, [('user','Ich gucke gerade noch bei ein paar anderen Shops, bevor ich mich entscheide.')], 'no_tools', None),
     ('sales_compare_en', False, [('user',"I'm browsing a few other stores before I make up my mind.")], 'no_tools', None),
     ('sales_known_priority', False, [('user','Ich vergleiche noch. Mir geht es vor allem um reine Baumwolle, keine Kunstfasern.')], 'no_tools', None),
@@ -33,7 +40,7 @@ CASES = [
     ('known_material', False, [('user', 'Ist das denn Baumwolle?')], 'no_tools', None),
     ('quality_general_de', False, [('user', 'Ich bin mir unsicher, ob die Qualität bei euch gut ist.')], 'no_tools', None),
     ('quality_general_en', False, [('user', 'Is your stuff actually good quality?')], 'no_tools', None),
-    ('quality_and_price', False, [('user', 'Bei euch war mir das etwas teuer und ich war mir nicht sicher, ob die Qualität gut ist.')], 'no_tools', None),
+    ('quality_and_price', False, [('user', 'Bei euch war mir das etwas teuer und ich war mir nicht sicher, ob die Qualität gut ist.')], 'get_offer', None),
     ('quality_known_gap', False, [('user', 'Hält das garantiert zehn Jahre?')], 'no_tools', None),
     ('quality_empty_description', False, [('user', 'Ist die Qualität gut?')], 'no_tools', None),
     ('quality_after_confirm', False, [('user', 'Wie sieht es mit der Verarbeitung des Shirts aus?')], 'no_tools', None),
@@ -43,7 +50,7 @@ CASES = [
         ('user', 'Okay, aber wie sind die Nähte verarbeitet?')], 'no_tools', None),
     ('objection_material_required', False, [('user', 'Ich habe eine Wollallergie. Ohne genaue Zusammensetzung kaufe ich das nicht. Ist es garantiert wollfrei?')], 'no_tools', None),
     ('objection_timing', False, [('user', 'Ich bin noch interessiert, will aber in Ruhe darüber nachdenken. Bitte noch keine SMS.')], None, None),
-    ('objection_competitor', False, [('user', 'Ein anderer Shop hat ein ähnliches Shirt günstiger. Warum sollte ich bei euch kaufen?')], None, None),
+    ('objection_competitor', False, [('user', 'Ein anderer Shop hat ein ähnliches Shirt günstiger. Warum sollte ich bei euch kaufen?')], 'get_offer', None),
     ('de_sms_natural', False, [('assistant', 'Soll ich dir den Link per SMS schicken?'), ('user', 'Das wäre super.')], 'send_checkout_link', False),
     ('en_sms_natural', False, [('assistant', 'Would you like the checkout link by text?'), ('user', 'Please do.')], 'send_checkout_link', False),
     ('ready_buyer', False, [('user', 'Ich brauche keine Beratung, schick mir einfach den Checkout per SMS.')], 'send_checkout_link', False),
@@ -97,6 +104,13 @@ async def main():
         async def check(case):
             name, prepared, dialog, expected, discount = case
             fixture = context
+            if name == 'price_no_offer':
+                fixture = {**context, 'availableDiscounts':[]}
+            if name.startswith('product_identity_'):
+                fixture = {**context, 'cart':{**context['cart'], 'items':[
+                    {**context['cart']['items'][0], 'title':'The Collection Snowboard: Liquid', 'description':''}]},
+                    'knowledge':{**context['knowledge'], 'products':[
+                        {**context['knowledge']['products'][0], 'title':'The Collection Snowboard: Liquid', 'description':'', 'attributes':[]}]}}
             if name in ('quality_empty_description', 'quality_after_confirm', 'objection_material_de',
                         'objection_material_en', 'objection_repeat', 'objection_material_required'):
                 fixture = {**context, 'cart': {**context['cart'], 'items': [
@@ -142,8 +156,12 @@ async def main():
                     passed = json.loads(calls[0].arguments).get('variant_id') == 'gid://shopify/ProductVariant/1'
             else:
                 passed = not stops_contact and not any(item.name in ('send_checkout_link','end_call') for item in calls)
+            if passed and expected == 'get_offer':
+                passed = json.loads(calls[0].arguments).get('discount_id') == 'synthetic-discount'
+            if passed and name == 'product_identity_correction':
+                passed = 'The Collection Snowboard: Liquid' in result.output_text
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_')) else {})}),flush=True)
+                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
