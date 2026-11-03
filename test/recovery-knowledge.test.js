@@ -117,3 +117,14 @@ test('conversation context never waits for optional Shopify knowledge or issues 
     assert.equal(a.products[0].status,'not_loaded');assert.equal(a.policies.status,'not_loaded');
     assert.equal(read.mock.calls.length,0);
 });
+
+test('cart preloads Zendesk summaries and the existing product detail tool returns the full evidence',async t=>{
+    t.mock.method(shopify,'graphql',async()=>({node:node()}));
+    const zendesk=require('../src/recovery/zendesk');
+    t.mock.method(zendesk,'product',async()=>({status:'loaded',source:'zendesk',productArticles:[{id:'1',title:'Dimensions',body:'x'.repeat(2000),truncated:false}],shopArticles:[]}));
+    const s=shop(),context=await knowledge.forCart(s,[{variantId:id}],true);
+    assert.equal(context.products[0].supportKnowledge.productArticles[0].body.length,900);
+    assert.equal(context.products[0].moreDetailsAvailable,true);
+    const detail=await knowledge.product(s,id);
+    assert.equal(detail.supportKnowledge.productArticles[0].body.length,2000);
+});

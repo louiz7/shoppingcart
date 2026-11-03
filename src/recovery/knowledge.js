@@ -2,6 +2,7 @@
 
 const shopify = require('./shopify');
 const { problem } = require('./policy');
+const zendesk = require('./zendesk');
 
 // Descriptive knowledge only: prices, inventory and checkout actions keep their fresh validations.
 const cache = new Map();
@@ -132,6 +133,7 @@ async function product(shop, variantId) {
         // Bound model context independently of Shopify pagination and reference fan-out.
         let used = 0;
         const bounded = attributes.filter(a=>{ used += a.value.length+a.label.length+100; return used<=16000; });
+        const supportKnowledge=await zendesk.product(shop,p.title);
         return {status:'loaded',source:'shopify',productId:p.id,variantId:v.id,title:text(p.title,200),
             variantTitle:text(v.title,200),description:text(p.description,12000),descriptionTruncated:(p.description || '').length>12000,
             vendor:text(p.vendor,200),productType:text(p.productType,200),category:text(p.category?.fullName,300),
@@ -142,7 +144,7 @@ async function product(shop, variantId) {
             attributes:bounded,referenceStatus,
             partial:Boolean(p.metafields?.pageInfo?.hasNextPage || v.metafields?.pageInfo?.hasNextPage || used>16000 ||
                 referencesTruncated || fields.some(f=>typeof f.value !== 'string' || f.value.length>16000)),
-            missingScopes:ids.length ? missingReferenceScopes : []};
+            missingScopes:ids.length ? missingReferenceScopes : [],supportKnowledge};
     });
 }
 
@@ -162,11 +164,13 @@ async function policies(shop) {
 
 function summary(product) {
     if (product.status !== 'loaded') return product;
-    return {...product,description:product.description.slice(0,2000),
+    const supportKnowledge=zendesk.summary(product.supportKnowledge || {status:'not_configured'});
+    return {...product,supportKnowledge,description:product.description.slice(0,2000),
         options:product.options.map(o=>({...o,values:o.values.slice(0,10)})),
         attributes:product.attributes.slice(0,12).map(a=>({...a,value:a.value.slice(0,500),truncated:a.truncated || a.value.length>500})),
         moreDetailsAvailable:product.description.length>2000 || product.attributes.length>12 ||
-            product.attributes.some(a=>a.value.length>500) || product.options.some(o=>o.values.length>10)};
+            product.attributes.some(a=>a.value.length>500) || product.options.some(o=>o.values.length>10) ||
+            [...(supportKnowledge.productArticles || []),...(supportKnowledge.shopArticles || [])].some(a=>a.truncated)};
 }
 
 async function forCart(shop, items, preload = false) {

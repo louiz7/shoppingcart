@@ -46,3 +46,21 @@ Knowledge tests cover public/private filtering, inactive/mismatched products, sc
 No live call/SMS was sent for this change. Model cases are synthetic, not an audio-latency benchmark. LiveKit CLI simulation is unavailable (`lk` is not installed); full voice acceptance remains unverified.
 
 Official references: [ProductVariant](https://shopify.dev/docs/api/admin-graphql/latest/objects/ProductVariant), [MetafieldDefinition](https://shopify.dev/docs/api/admin-graphql/latest/objects/MetafieldDefinition), [Metaobject](https://shopify.dev/docs/api/admin-graphql/latest/objects/Metaobject), [MetaobjectDefinition](https://shopify.dev/docs/api/admin-graphql/latest/objects/MetaobjectDefinition), [ShopPolicy](https://shopify.dev/docs/api/admin-graphql/latest/objects/ShopPolicy). Tool wiring follows [LiveKit function tools](https://docs.livekit.io/agents/logic/tools/definition/) (web fallback, also verified against installed SDK contracts).
+
+## Deskspace public Zendesk pilot
+
+Only the verified live Deskspace tenant (`desqup.myshopify.com`, customer 1080 and its exact shop UUID) receives public German articles from `support.deskspace.de`. No credentials, customer data, tickets or arbitrary URLs are sent to Zendesk. The snowboard demo and other tenants are excluded.
+
+The existing pre-dial product preload adds articles for an exact product-family match, plus general shipping, returns and payment articles. `get_product_details` retrieves the cached longer text when the overview is insufficient. Known facts need no additional lookup during a conversational turn. Shopify remains authoritative for current prices, availability, variants and checkout actions.
+
+The fixed section map intentionally excludes ambiguous titles, bundles and refurbished versions. In particular, `PRO PLUS – Neues Modell` does not inherit PRO PLUS or V3 details without a verified mapping. A misplaced EXECUTIVE warranty article in the EXECUTIVE LITE section is excluded. Unmapped products still have their Shopify data and general help-center articles.
+
+The current endpoint returned all 94 articles without authentication. The pilot reads at most 100 articles and 2 MB, refuses redirects, times out after four seconds and caches the public index for five minutes with single-flight loading. More pages are flagged as partial rather than followed. Extend bounded same-origin pagination before the catalog exceeds 100 articles. Unavailable Zendesk data does not block Shopify knowledge; its unavailable status can remain in the outer product cache for up to five minutes.
+
+Only public, published, current German articles are accepted. HTML is converted to model evidence with table rows and cell boundaries retained. Sources and update dates accompany each article. Product text is capped at 16,000 characters and general articles at 20,000; overview product text is limited to the first two articles at 900 characters each. Truncation is explicit. Images, videos and PDFs are marked unread; their contents are not extracted. Articles are untrusted evidence, never tool instructions. Missing conditions and conflicting sources cannot support promises.
+
+Verification: eight Zendesk unit cases plus nine knowledge cases, 21 offline agent SDK tests and 70 synthetic reasoning-model cases passed. The latter include exact dimensions, a follow-up detail lookup, Zendesk shipping despite absent Shopify policy scopes, ambiguous versions and prompt injection. A real public-index read took 249 ms in one local sample, with subsequent family selections using cache. This is not an audio-latency benchmark. No live call, SMS or Zendesk ticket was created.
+
+The merchant's proposed Lea persona, service-first flow, discount-last policy, human callback ticketing and consent capture are separate planned work; this integration does not change those behaviors.
+
+API reference: [Zendesk Help Center articles](https://developer.zendesk.com/api-reference/help_center/help-center-api/articles/).

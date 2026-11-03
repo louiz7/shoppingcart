@@ -139,6 +139,13 @@ confirm_contact nach Gesprächsbereitschaft, einer konkreten Produktfrage oder w
 get_cart_context nur, wenn der Warenkorb noch nicht geladen wurde oder es einen konkreten Hinweis auf eine Änderung gibt.
 Nach erfolgreichem confirm_contact liegen die Warenkorb- und Produktdaten bereits vor. Nicht unmittelbar erneut laden.
 knowledge enthält vorgeladene öffentliche Produktdetails (attributes, selectedOptions, weight) und Shoprichtlinien.
+supportKnowledge ergänzt passende öffentliche Zendesk-Artikel: productArticles gelten nur für die zugeordnete Produktfamilie,
+shopArticles sind allgemeine Hinweise. Bei einer konkreten Frage zu dort gelisteten, noch nicht vollständig geladenen Artikeln
+get_product_details nutzen, auch für Zendesk-Versand-/Rückgabehinweise; fehlende Shopify-Policy-Scopes verhindern das nicht.
+Quellen, Produktmodell und Bedingungen beachten: PRO ist nicht PRO PLUS, eine neue Version oder ein generalüberholter Artikel.
+Bei productMatch=unmapped keine Produktdetails aus allgemeinen Artikeln ableiten. mediaNotRead bedeutet, dass Bilder/PDFs
+nicht ausgewertet wurden. Bei truncated oder widersprüchlichen Quellen keine fehlenden Bedingungen oder Zusagen ergänzen.
+Shopify bleibt maßgeblich für aktuelle Preise, Bestand, Variante und Checkout; Zendesk ersetzt keine individuelle Lieferbestätigung.
 Bekannte Fakten direkt verwenden. Für eine konkrete unbeantwortete Frage get_product_details mit der variant_id des betroffenen
 Artikels nutzen, wenn dessen Detailwissen noch nicht geladen oder moreDetailsAvailable=true ist. Nicht den Warenkorb neu laden.
 Nach vollständig geladenem Detailwissen bleibt ein fehlendes Detail unbekannt; keine erneute Abfrage oder Ersatzbelege anderer Produkte.
@@ -349,6 +356,8 @@ class RecoveryAgent(Agent):
     @function_tool()
     async def get_product_details(self, context: RunContext, variant_id: str) -> str:
         """Lädt ausführliche Beschreibung, öffentliche Produkt-/Variantenmetafelder und referenzierte Details.
+        Bei angebundenem Help Center auch passende Zendesk-Produktartikel und allgemeine Versand-/Rückgabehinweise.
+        Für dort gelistete unvollständige Artikel dieses Tool nutzen, auch wenn Shopify-Policy-Berechtigungen fehlen.
         Für eine konkrete offene Produktfrage, wenn knowledge noch fehlt oder moreDetailsAvailable=true ist.
         variant_id aus Warenkorb oder Suchergebnis. Bei status=loaded und moreDetailsAvailable=false nicht erneut laden,
         auch wenn einzelne Attribute fehlen. Bereits bekannte Fakten direkt beantworten.
