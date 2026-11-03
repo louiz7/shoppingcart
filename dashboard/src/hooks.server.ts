@@ -6,11 +6,11 @@ const PUBLIC_PATHS = new Set(['/login', '/register']);
 
 export const handle: Handle = async ({ event, resolve }) => {
 	const path = event.url.pathname;
-	if (['/demo', '/demo/session'].includes(path)) {
+	if (['/demo', '/demo/session', '/demo/unlock'].includes(path)) {
 		event.locals.user = null;
 		const response = await resolve(event);
 		response.headers.set('Cache-Control', 'no-store');
-		response.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+		if (!response.headers.has('Content-Security-Policy')) response.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
 		return response;
 	}
 	if ((event.request.method === 'GET' || event.request.method === 'HEAD') &&

@@ -76,6 +76,7 @@ jobs:
         run: |
           npm run check --prefix dashboard
           npm run build --prefix dashboard
+          node scripts/test-demo-unlock.mjs
       - name: Audit isolated API runtime
         run: npm audit --prefix deploy/ecom --omit=dev --audit-level=high
       - name: Package allowlisted Linux runtime
