@@ -104,8 +104,11 @@ async function end(token,column='token_hash') {
     await clients().rooms.deleteRoom(row.room).catch(error=>{if(error.status!==404 && error.code!=='not_found') throw error;});
     return {ended:true};
 }
-function consent(s,id) {if(!id || id!==s.userEvent || s.userSeq!==s.seq) throw policy.problem('conversation_changed',409);}
-function reviewed(s,after) {if(!(s.assistantSeq>after && s.userSeq>s.assistantSeq) || s.interrupted) throw policy.problem('checkout_review_required',409);}
+function consent(s,id) {if(!id || id!==s.userEvent) throw policy.problem('conversation_changed',409);}
+function reviewed(s,after) {
+    const review=s.userReview;
+    if(!review || !(review.seq>after && s.userSeq>review.seq) || review.interrupted) throw policy.problem('checkout_review_required',409);
+}
 function link(shop,cart,code) {
     const path=catalog.selection(cart.items.map(i=>({variantId:i.variantId,quantity:i.quantity}))).map(i=>i.variantId.split('/').at(-1)+':'+i.quantity).join(',');
     const url=new URL('https://'+shop.domain+'/cart/'+path);
@@ -124,7 +127,9 @@ async function tool(token,name,input={}) {
         if(name==='transcript') {
             if(!require('./service').uuid(input.eventId) || !['user','assistant'].includes(input.role)) throw policy.problem('invalid_transcript');
             if(s.lastEvent!==input.eventId){s.seq++;s.lastEvent=input.eventId;
-                if(input.role==='user'){s.userEvent=input.eventId;s.userSeq=s.seq;}
+                if(input.role==='user'){s.userEvent=input.eventId;s.userSeq=s.seq;
+                    // Bind the review to the user's reply, not a later spoken acknowledgement.
+                    s.userReview={seq:s.assistantSeq??0,interrupted:s.interrupted===true};}
                 else{s.assistantSeq=s.seq;s.interrupted=input.interrupted===true;}}
             result={recorded:true}; // Only provenance/order, never transcript text or customer data.
         } else if(name==='latency') result={recorded:true};

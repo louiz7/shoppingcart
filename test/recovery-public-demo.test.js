@@ -28,7 +28,7 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  await assert.rejects(demo.tool(browser,'context'),{code:'invalid_demo_session'});
  await assert.rejects(demo.status(token),{code:'invalid_demo_session'});
  await assert.rejects(demo.tool(token,'context'),{code:'contact_confirmation_required'});
- let user=await message('user');await demo.tool(token,'confirm_contact',{userEventId:user});
+ let user=await message('user');await message('assistant');await demo.tool(token,'confirm_contact',{userEventId:user});
  assert.equal((await demo.tool(token,'context')).cart.items[0].title,'Test item');
  await demo.tool(token,'offer',{discountId:'approved',percent:10});
  await assert.rejects(demo.tool(token,'send_link',{useDiscount:true,userEventId:user}),{code:'checkout_review_required'});
@@ -36,15 +36,23 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  let sent=await demo.tool(token,'send_link',{useDiscount:false,userEventId:user});
  assert.equal(sent.smsSent,false);assert.equal(new URL(sent.checkoutUrl).searchParams.has('discount'),false);
  await message('assistant');user=await message('user');
+ // A spoken acknowledgement after acceptance must not invalidate it.
+ await message('assistant');
  sent=await demo.tool(token,'send_link',{useDiscount:true,userEventId:user});assert.equal(new URL(sent.checkoutUrl).searchParams.get('discount'),'EXTRA10');
- await demo.tool(token,'offer',{discountId:'approved'});await message('assistant',true);user=await message('user');
+ await demo.tool(token,'offer',{discountId:'approved'});await message('assistant',true);user=await message('user');await message('assistant');
  await assert.rejects(demo.tool(token,'send_link',{useDiscount:true,userEventId:user}),{code:'checkout_review_required'});
  await assert.rejects(demo.tool(token,'product_details',{variantId:'gid://shopify/ProductVariant/999'}),{code:'unknown_product'});
  const proposal=await demo.tool(token,'prepare_checkout',{items:[{variantId:'gid://shopify/ProductVariant/123',quantity:2}]});
  await assert.rejects(demo.tool(token,'send_link',{useDiscount:false,preparedCheckoutId:proposal.preparedCheckoutId,userEventId:user}),{code:'checkout_review_required'});
- await message('assistant');user=await message('user');
+ await message('assistant');user=await message('user');await message('assistant');
  sent=await demo.tool(token,'send_link',{useDiscount:false,preparedCheckoutId:proposal.preparedCheckoutId,userEventId:user});
  assert.equal(new URL(sent.checkoutUrl).pathname,'/cart/123:2');assert.equal(new URL(sent.checkoutUrl).search,'');
+ const previousUser=user;user=await message('user');
+ await assert.rejects(demo.tool(token,'send_link',{useDiscount:false,userEventId:previousUser}),{code:'conversation_changed'});
+ // Preparing a changed offer still needs a fresh review and response.
+ const changed=await demo.tool(token,'prepare_checkout',{items:[{variantId:'gid://shopify/ProductVariant/123',quantity:3}]});
+ await message('assistant');
+ await assert.rejects(demo.tool(token,'send_link',{useDiscount:false,preparedCheckoutId:changed.preparedCheckoutId,userEventId:user}),{code:'checkout_review_required'});
  const view=await demo.status(browser);assert.equal(view.checkout.discountPercent,0);
  assert.equal(JSON.stringify((await db.query('SELECT data FROM recovery_demo_sessions WHERE id=$1',[id])).rows).includes('not retained'),false);
  assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_calls WHERE shop_id=$1',[shopId])).rows[0].n,0);

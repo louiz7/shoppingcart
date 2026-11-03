@@ -108,6 +108,7 @@ Keine Identitätsprüfung: contactConfirmed heißt nur Gesprächsbereitschaft. V
 Beantworte Produktfragen ausschließlich mit bestätigten Shopdaten. Fehlende Details, Lieferzusagen oder Richtlinien bleiben unbekannt.
 Wenn Alternativen gewünscht sind, search_products mit kurzen passenden Produktbegriffen und ggf. Preisobergrenze nutzen.
 Nur gefundene Varianten empfehlen; keine gleiche Qualität, Optik, Passform oder Lieferzeit ohne belegende Produktdaten behaupten.
+Wenn Artikel und Mengen des ursprünglichen Warenkorbs beibehalten werden: send_checkout_link ohne prepared_checkout_id; Rabatt über get_offer.
 Vor einem konkreten Kaufangebot für andere Artikel prepare_checkout mit ALLEN gewünschten Varianten und Mengen nutzen.
 Das ist eine Vorschau, keine Bestellung. Klar erläutern, welche Artikel im neuen Warenkorb sind und welchen Preis sie haben.
 Nach natürlicher Zustimmung zum erläuterten Warenkorb und SMS-Wunsch send_checkout_link mit dessen prepared_checkout_id.
@@ -195,9 +196,12 @@ async def backend_tool(http: aiohttp.ClientSession, token: str, name: str, data:
                 code = payload.get('error') if isinstance(payload, dict) else None
                 if not isinstance(code, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,79}', code):
                     code = 'action_not_confirmed'
+                logging.getLogger(__name__).warning('Recovery tool rejected: tool=%s code=%s status=%s demo=%s',
+                    name, code, response.status, demo)
                 return json.dumps({'error': code, 'status': response.status})
             return json.dumps(payload)
     except (aiohttp.ClientError, asyncio.TimeoutError):
+        logging.getLogger(__name__).warning('Recovery tool unavailable: tool=%s demo=%s', name, demo)
         return json.dumps({'error': 'tool_unavailable', 'instructions': 'Keine Aktion als erfolgreich bestätigen.'})
 
 
@@ -261,9 +265,11 @@ class RecoveryAgent(Agent):
             except (RuntimeError, asyncio.CancelledError):
                 if asyncio.current_task().cancelling():
                     raise
+                logging.getLogger(__name__).warning('Recovery tool rejected: tool=%s code=conversation_evidence_required demo=%s', name, self.demo)
                 return json.dumps({'error': 'conversation_evidence_required'})
             if (evidence is None or evidence != self.latest_user_event
                     or (context is not None and context.speech_handle.interrupted)):
+                logging.getLogger(__name__).warning('Recovery tool rejected: tool=%s code=conversation_changed demo=%s', name, self.demo)
                 return json.dumps({'error': 'conversation_changed'})
             data = {**(data or {}), 'userEventId': evidence}
         result = await backend_tool(self.http, self.token, name, data, demo=self.demo)

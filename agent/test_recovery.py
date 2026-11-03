@@ -429,8 +429,11 @@ class WorkerLifecycle(OfflineRecoveryCase):
         http = SimpleNamespace(post=Mock(return_value=response))
         for value, expected in [('cart_changed','cart_changed'),('provider failed: secret=unsafe','action_not_confirmed')]:
             response.payload = {'error':value,'secret':'must not leave gateway'}
-            result = json.loads(await self.module.backend_tool(http,'test','send_link'))
+            with self.assertLogs(self.module.__name__, level='WARNING') as logs:
+                result = json.loads(await self.module.backend_tool(http,'private-session-token','send_link'))
             self.assertEqual(result,{'error':expected,'status':409})
+            self.assertEqual(logs.records[0].getMessage(),
+                f'Recovery tool rejected: tool=send_link code={expected} status=409 demo=False')
 
     async def test_invalid_metadata_never_connects_or_opens_http(self):
         for metadata in ['{broken', '[]', 'null', '{"mode":"recovery","call_token":"bad"}', '{"mode":"collection"}']:

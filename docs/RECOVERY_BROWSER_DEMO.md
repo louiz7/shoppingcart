@@ -15,3 +15,5 @@ Verification: Node integration tests cover session/worker-token separation, conv
 References: [LiveKit job lifecycle](https://docs.livekit.io/agents/server/job/), [JavaScript SDK](https://docs.livekit.io/reference/client-sdk-js/), [agent state events](https://docs.livekit.io/reference/agents/events/). CLI/docs MCP were unavailable; API signatures were checked against the installed Python/Node SDKs and official web documentation.
 
 The founder persona may play the founder in the browser demo greeting; the page labels this as AI roleplay. Direct identity questions are answered truthfully. This demo-only greeting and identity instruction never apply to phone calls.
+
+Link consent uses the latest user event and the assistant review immediately preceding that response. A subsequent spoken acknowledgement does not invalidate the response; changed proposals and interrupted reviews still require a valid new response. Tool failures log only the operation, sanitized error code, status and demo flag, never arguments, tokens or transcript text.
