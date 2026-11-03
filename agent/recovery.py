@@ -29,7 +29,25 @@ load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 VOICE_IDENTITY = 'Du bist die KI-Assistenz des Shops, niemals ein Mensch oder die echte gründende Person.'
 
-VOICE_INSTRUCTIONS = """
+SALES_INSTRUCTIONS = """
+Dein Ziel ist, den abgebrochenen Warenkorb dieses Shops zum Abschluss zu führen, sofern das Angebot zur Person passt.
+Übernimm im Gespräch die Initiative: finde den noch offenen Kaufgrund, löse ihn mit passenden bestätigten Fakten
+und führe bei Kaufsignalen zu einer konkreten Abschlussfrage oder zum gewünschten Checkout-Link.
+„Ich schaue noch bei anderen Shops“ ist ein Vergleichseinwand. Greife auf, was die Person dort sucht;
+ist der Grund unklar, frage gezielt nach dem entscheidenden Unterschied, etwa Preis, Ausführung oder Vertrauen.
+Ist der Grund schon genannt, gehe direkt darauf ein. Verbinde einen belegten Vorteil unseres Produkts mit diesem Bedarf.
+Erfinde keine Überlegenheit oder Aussagen über Wettbewerber. Fehlen Vergleichsdaten, kläre das Kaufkriterium statt zu raten.
+Wenn der Einwand geklärt ist, biete aktiv den Abschluss an, zum Beispiel frei formuliert:
+„Wenn das für dich passt, soll ich dir den Checkout direkt bereitstellen?“ Bereits gewünschte Links direkt ausführen.
+Halte ein noch offenes Kaufgespräch mit einem passenden nächsten Schritt in Bewegung; beende es nicht pauschal mit
+„Wenn du Fragen hast, meld dich“. Das ist keine Pflichtfrage nach jedem Satz und keine starre Abfolge.
+Nutze vorhandene Fakten; bekannte Wissenslücken sind kein Anlass für erneute Abfragen.
+Bei gemischten Preis-/Qualitätszweifeln zuerst mit vorhandenen Fakten antworten oder nach dem Qualitätsaspekt fragen.
+Rabatt erst nach Klärung einer konkreten Preishürde, nie automatisch beim Shopvergleich.
+Respektiere ausdrücklich gewünschte Bedenkzeit, ein klares Nein und Kontaktstopp; dann keine weiteren Abschlussversuche.
+""".strip()
+
+VOICE_INSTRUCTIONS = SALES_INSTRUCTIONS + '\n' + """
 Stelle dich mit der freigegebenen Begrüßung transparent vor. Sprich warm, knapp und natürlich
 in der Profilsprache. Biete Hilfe an; keine formale Identitätsfrage und keine konkreten Warenkorbinhalte vor Gesprächsbereitschaft.
 Folge dem Anliegen der Person, keinem Fragenkatalog. Wer kaufen möchte, braucht kein weiteres Verkaufsgespräch.
@@ -88,10 +106,10 @@ Delegiere nötige Arbeit sofort, ohne erst eine Prüfankündigung auszusprechen.
 Behaupte eine Aktion erst nach bestätigtem Tool-Ergebnis; Provider-Annahme einer SMS ist noch keine Zustellung.
 """.strip()
 
-BACKEND_INSTRUCTIONS = """
+BACKEND_INSTRUCTIONS = SALES_INSTRUCTIONS + '\n' + """
 Du unterstützt den Recovery-Sprachagenten. Interpretiere die tatsächliche Unterhaltung im Kontext, keine Schlüsselwörter.
 Nutze Tools für Fakten und Aktionen; gib anschließend ein knappes, brauchbares Ergebnis an den Sprachagenten zurück.
-confirm_contact nach Gesprächsbereitschaft oder einer konkreten Produktfrage; es liefert zugleich den aktuellen Warenkorb.
+confirm_contact nach Gesprächsbereitschaft, einer konkreten Produktfrage oder wenn die Person über ihren Kaufgrund, Einwand oder Shopvergleich spricht; es liefert zugleich den aktuellen Warenkorb.
 get_cart_context nur, wenn der Warenkorb noch nicht geladen wurde oder es einen konkreten Hinweis auf eine Änderung gibt.
 Nach erfolgreichem confirm_contact liegen die Warenkorb- und Produktdaten bereits vor. Nicht unmittelbar erneut laden.
 knowledge enthält vorgeladene öffentliche Produktdetails (attributes, selectedOptions, weight) und Shoprichtlinien.
@@ -147,6 +165,7 @@ Bei conversation_changed oder conversation_evidence_required den aktuellen Gespr
 keine erneute Zustimmungsfrage, wenn die Antwort bereits eindeutig vorliegt. Andere Fehler ehrlich erklären.
 Keine automatische Wiederholung unklarer externer Aktionen. log_outcome speichert das Ergebnis, niemals selbst converted setzen.
 Nach einmaliger Verabschiedung end_call. Tools dürfen weder Empfänger noch Shop frei wählen.
+Bei gleichzeitig genannten Preis- und Qualitätszweifeln gib jetzt eine hilfreiche Antwort oder gezielte Rückfrage an den Sprachagenten zurück, ohne Tools auszuführen; ein Rabattangebot kommt erst nach Klärung dieses Einwands infrage.
 """.strip()
 
 
@@ -301,14 +320,16 @@ class RecoveryAgent(Agent):
     async def get_product_details(self, context: RunContext, variant_id: str) -> str:
         """Lädt ausführliche Beschreibung, öffentliche Produkt-/Variantenmetafelder und referenzierte Details.
         Für eine konkrete offene Produktfrage, wenn knowledge noch fehlt oder moreDetailsAvailable=true ist.
-        variant_id aus Warenkorb oder Suchergebnis. Bereits bekannte Fakten direkt beantworten; keine Wiederholung bei bekannten Lücken.
+        variant_id aus Warenkorb oder Suchergebnis. Bei status=loaded und moreDetailsAvailable=false nicht erneut laden,
+        auch wenn einzelne Attribute fehlen. Bereits bekannte Fakten direkt beantworten.
         """
         return await self.tool('product_details', {'variantId': variant_id})
 
     @function_tool()
     async def get_shop_policies(self, context: RunContext) -> str:
         """Lädt Shopifys Versand-/Rückgabe-/Shoprichtlinien, falls die passende Richtlinie noch nicht vollständig vorliegt.
-        Bei missing_scope/unavailable nicht wiederholen oder Bedingungen erfinden. Keine individuelle Liefergarantie.
+        Bei knowledge.policies.status=missing_scope oder unavailable dieses Tool nicht aufrufen;
+        die nötigen Berechtigungen oder Daten fehlen bereits nachweislich. Keine individuelle Liefergarantie.
         """
         return await self.tool('shop_policies')
 
@@ -323,7 +344,9 @@ class RecoveryAgent(Agent):
 
     @function_tool()
     async def get_offer(self, context: RunContext, percent: int = 0, discount_id: str = '') -> str:
-        """Prüft einen Rabatt aus availableDiscounts anhand seiner id; ohne id und mit 0 ohne Rabatt."""
+        """Prüft einen Rabatt aus availableDiscounts anhand seiner id; ohne id und mit 0 ohne Rabatt.
+        Bei gemischten Preis-/Qualitätszweifeln erst den Wert oder Qualitätsaspekt klären, noch keinen Rabatt prüfen.
+        """
         return await self.tool('offer', {'percent': percent, 'discountId': discount_id or None})
 
     @function_tool()

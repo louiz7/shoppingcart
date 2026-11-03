@@ -16,6 +16,12 @@ from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('sales_compare_de', False, [('user','Ich gucke gerade noch bei ein paar anderen Shops, bevor ich mich entscheide.')], 'no_tools', None),
+    ('sales_compare_en', False, [('user',"I'm browsing a few other stores before I make up my mind.")], 'no_tools', None),
+    ('sales_known_priority', False, [('user','Ich vergleiche noch. Mir geht es vor allem um reine Baumwolle, keine Kunstfasern.')], 'no_tools', None),
+    ('sales_ready', False, [('assistant','Das Shirt besteht laut Produktdaten aus 100 Prozent Baumwolle. Passt das für dich?'),('user','Ja, genau das suche ich. Schick mir den Checkout per SMS.')], 'send_checkout_link', False),
+    ('sales_pause', False, [('user','Ich bin weiterhin interessiert, möchte aber heute erst in Ruhe vergleichen. Ich melde mich dann selbst; bitte jetzt keinen Link schicken.')], None, None),
+    ('sales_stop', False, [('user','Nein, ich kaufe das nicht. Bitte ruft mich auch nicht mehr an.')], 'stop_contact', None),
     ('knowledge_known_material', False, [('user','Aus welchem Material ist das Shirt genau?')], 'no_tools', None),
     ('knowledge_more_details', False, [('user','Welche Pflegehinweise stehen beim Shirt?')], 'get_product_details', None),
     ('knowledge_variant_not_loaded', False, [('user','What material is this shirt made of?')], 'get_product_details', None),
@@ -80,7 +86,7 @@ async def main():
         schemas.append({'type':'function', 'name':tool.info.name, 'description':tool.info.description,
             'parameters':llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema(), 'strict':False})
     context = {'contactConfirmed':True, 'supportEmail':'help@example.invalid',
-        'cart':{'currency':'EUR','subtotalCents':10000,'items':[{'variantId':'gid://shopify/ProductVariant/1','title':'Synthetic cotton shirt','quantity':1,'originalUnitCents':10000,'currentPriceCents':10000,'description':'Cotton, available in M and L.'}]},
+        'cart':{'currency':'EUR','subtotalCents':10000,'items':[{'variantId':'gid://shopify/ProductVariant/1','title':'Test cotton shirt','quantity':1,'originalUnitCents':10000,'currentPriceCents':10000,'description':'Cotton, available in M and L.'}]},
         'knowledge':{'products':[{'variantId':'gid://shopify/ProductVariant/1','status':'loaded','moreDetailsAvailable':False,
             'description':'Cotton, available in M and L.','attributes':[{'owner':'product','label':'Material','value':'100% cotton'}]}],
             'policies':{'status':'missing_scope','missingScopes':['read_legal_policies']}},
@@ -94,7 +100,7 @@ async def main():
             if name in ('quality_empty_description', 'quality_after_confirm', 'objection_material_de',
                         'objection_material_en', 'objection_repeat', 'objection_material_required'):
                 fixture = {**context, 'cart': {**context['cart'], 'items': [
-                    {**context['cart']['items'][0], 'title': 'Synthetic shirt', 'description': ''}]},
+                    {**context['cart']['items'][0], 'title': 'Test shirt', 'description': ''}]},
                     'knowledge':{**context['knowledge'],'products':[{**context['knowledge']['products'][0],'description':'','attributes':[]}]}}
             if name in ('knowledge_more_details','knowledge_variant_not_loaded'):
                 fixture = {**context,'cart':{**context['cart'],'items':[{**context['cart']['items'][0],'description':''}]},
@@ -137,7 +143,7 @@ async def main():
             else:
                 passed = not stops_contact and not any(item.name in ('send_checkout_link','end_call') for item in calls)
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_')) else {})}),flush=True)
+                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),
