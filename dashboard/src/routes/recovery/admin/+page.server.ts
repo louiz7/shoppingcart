@@ -36,6 +36,7 @@ const action = (kind: string): Actions[string] => async ({ locals, request }) =>
 			result = await recoveryRequest(locals.user.customerId, ['sync', 'webhooks'].includes(kind) ? `/${shop}/${kind}` : `/${shop}/checkouts/${checkout}/${kind}`, {});
 		}
 		if (kind === 'connect') redirect(303, result.url);
+		if (kind === 'sync' && !result.simulated) return { success: `${result.imported} Warenkörbe importiert. ${result.skipped || 0} nicht unterstützte Warenkörbe übersprungen; diese werden nicht angerufen.`, error: null };
 		return { success: result.control ? 'Kontrollgruppe: Es wird kein Anruf ausgelöst.' : result.simulated ? 'Simulation ausgeführt. Keine externe Aktion.' : 'Gespeichert.', error: null };
 	} catch (error) {
 		if (error && typeof error === 'object' && 'status' in error && 'location' in error) throw error;

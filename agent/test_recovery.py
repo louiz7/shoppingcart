@@ -256,6 +256,25 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 with self.assertRaisesRegex(ValueError,'invalid_agent_profile'):
                     self.module.profile_options({'agentProfile':{**profile,**change}})
 
+    async def test_assistant_service_policy_reaches_both_voice_and_reasoning(self):
+        profile = {'name':'Lea','persona':'assistant','voice':'female','language':'de',
+            'greeting':'Hey, hier ist Lea, die digitale KI-Assistentin von Synthetic shop.'}
+        ctx,http,session = self.fixture(profile=profile)
+        agent = self.module.RecoveryAgent('synthetic',http.initial,http)
+        self.assertEqual(self.module.profile_options(http.initial)['preset'],'nuri')
+        self.assertIn(self.module.SERVICE_INSTRUCTIONS,agent.instructions)
+        for prompt in [agent.instructions,self.module.backend_options(persona='assistant')['instructions']]:
+            self.assertNotIn('zuerst einen erlaubten Rabatt',prompt)
+            self.assertNotIn('kann dir versichern',prompt)
+            self.assertNotIn('{quality_guidance}',prompt)
+            self.assertIn('Keine Rückrufbuchung',prompt)
+        with patch.object(self.module.aiohttp,'ClientSession',return_value=http), \
+                patch.object(self.module.openai.realtime,'GPTLiveModel',return_value=object()) as model, \
+                patch.object(self.module,'AgentSession',return_value=session):
+            await asyncio.wait_for(self.module.entrypoint(ctx),2)
+        self.assertIn(self.module.SERVICE_INSTRUCTIONS,model.call_args.kwargs['responses_options']['instructions'])
+        self.assertIn('zuerst einen erlaubten Rabatt',self.module.backend_options()['instructions'])
+
     async def test_browser_demo_uses_same_agent_but_isolated_transport_and_tools(self):
         ctx, http, session = self.fixture(finish='conversation_items',profile={
             'name':'Jake','persona':'founder','voice':'male','language':'de',

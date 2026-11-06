@@ -123,12 +123,26 @@ async function syncShop(customerId, shopId) {
     if (shop.mode === 'simulation') return { simulated: true, imported: 0 };
     try {
         const nodes = await shopify.listCheckouts(shop);
+        let imported = 0;
+        const skippedReasons = {};
         await transaction(async (client) => {
             await shopFor(customerId, shopId, client, true);
-            for (const node of nodes) await upsertCheckout(client, shop, shopify.normalizeCheckout(node, shop));
+            for (const node of nodes) {
+                let snapshot;
+                try { snapshot = shopify.normalizeCheckout(node, shop); }
+                catch (error) {
+                    // A single unsupported cart must not block the other verified carts.
+                    if (!['unsupported_currency','mixed_cart_currency','invalid_checkout_host','cart_too_large','invalid_cart_items'].includes(error.code)) throw error;
+                    skippedReasons[error.code] = (skippedReasons[error.code] || 0) + 1;
+                    continue;
+                }
+                await upsertCheckout(client, shop, snapshot);
+                imported++;
+            }
+            if (nodes.length !== imported) await event(client, shop.id, 'checkout_sync_skipped', { count: nodes.length-imported, reasons: skippedReasons });
             await client.query('UPDATE recovery_shops SET sync_at=NOW(),last_error=NULL WHERE id=$1', [shop.id]);
         });
-        return { imported: nodes.length };
+        return { imported, skipped: nodes.length-imported, skippedReasons };
     } catch (error) {
         await db.query('UPDATE recovery_shops SET last_error=$2 WHERE id=$1', [shop.id, error.code || 'sync_failed']);
         throw error;
@@ -577,7 +591,7 @@ async function confirmContact(call, userEventId) {
 }
 
 async function outcome(call, input) {
-    if (!['interested', 'refused', 'wrong_person', 'voicemail', 'purchased_claimed', 'human_needed', 'no_answer'].includes(input.outcome) ||
+    if (!['interested', 'undecided', 'refused', 'wrong_person', 'voicemail', 'purchased_claimed', 'human_needed', 'no_answer'].includes(input.outcome) ||
         typeof input.summary !== 'string' || input.summary.length > 1000) throw policy.problem('invalid_outcome');
     if (['refused', 'wrong_person'].includes(input.outcome)) await stopContact(call.customer_id, call.shop_id, call.checkout_id, input.outcome, call.id);
     await db.query(`UPDATE recovery_calls SET outcome=$2,summary=$3 WHERE id=$1`, [call.id, input.outcome, input.summary]);

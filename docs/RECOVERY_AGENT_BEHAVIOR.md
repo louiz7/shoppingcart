@@ -1,5 +1,15 @@
 # Recovery conversation and tool boundaries
 
+## Deskspace service assistant, 2026-11-06
+
+The assistant persona uses service-led purchase guidance in both GPT Live voice instructions and its reasoning backend. It introduces itself as a digital AI assistant, answers checkout/product questions from verified data, and still aims to resolve purchase barriers and offer checkout. “No questions” prompts one natural question about what is preventing the purchase when that reason is unknown. Known barriers are addressed directly; clear refusals and requests for thinking time end the sales push. Discounts follow unresolved product questions and are appropriate when price remains the barrier. Accepted discounts and requested SMS retain their existing server-side checks. No inbound routing, callback booking or human handoff is promised without an implemented action.
+
+A neutral `undecided` outcome avoids permanently suppressing someone merely browsing. Explicit refusal/wrong-person outcomes and contact-stop requests continue to suppress future contact. Founder/demo guidance remains separate.
+
+Checkout import now skips only explicitly unsupported normalization results (currency, mixed currency, unapproved checkout host, invalid/oversized cart), records aggregate reason counts and imports valid carts. Unexpected failures still roll back. This never grants contact permission or relaxes checkout URL verification; every call/action still refreshes its checkout.
+
+Verification before release: 151 local backend tests, 22 offline LiveKit SDK tests, dashboard type checking, and 43 synthetic real reasoning-model cases passed. The model evaluation covers the purchase-barrier follow-up, known-price objection, direct link request, discount agreement/retraction, knowledge lookup, off-topic requests and contact stop. Generated replies were inspected. These checks do not replace the real phone/SMS acceptance test or prove conversion lift. Review covered both prompt consumers, tenant-scoped import, outcome callers and existing authorization boundaries; no new security issue was found in this diff. The installed security guidance has no Svelte/LiveKit-specific reference.
+
 The [Shopify knowledge inventory](RECOVERY_SHOPIFY_KNOWLEDGE.md) documents product details, public metafields/metaobjects, policies, permissions, caching and query limits.
 
 GPT Live and its existing reasoning model interpret conversation intent. There are no runtime keyword lists, fixed acceptance phrases, or additional consent-classifier model calls. The voice prompt provides flexible guidance for objections, listening, interruptions and delegation. The founder persona remains disclosed as AI working for the founding team.

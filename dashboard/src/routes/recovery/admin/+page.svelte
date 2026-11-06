@@ -15,7 +15,7 @@
 	const date = (value: string | null) => value ? new Date(value).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 	const labels: Record<string,string> = { pending: 'Wartet', calling: 'Im Gespräch', contacted: 'Kontaktiert', stopped: 'Kontaktstopp', converted: 'Bestellt', expired: 'Abgelaufen',
 		reserved: 'Reserviert', dialing: 'Wählt', connected: 'Verbunden', ended: 'Beendet', failed: 'Fehlgeschlagen', unknown: 'Ergebnis prüfen', simulated: 'Simuliert',
-		control: 'Kontrollgruppe', treatment: 'Recovery', interested: 'Interessiert', refused: 'Abgelehnt', wrong_person: 'Falsche Person', voicemail: 'Mailbox', human_needed: 'Übergabe', purchased_claimed: 'Kauf angegeben' };
+		control: 'Kontrollgruppe', treatment: 'Recovery', interested: 'Interessiert', undecided: 'Noch unentschieden', refused: 'Abgelehnt', wrong_person: 'Falsche Person', voicemail: 'Mailbox', human_needed: 'Übergabe', purchased_claimed: 'Kauf angegeben' };
 	const r = $derived(data.recovery);
 	const checkouts = $derived((r?.checkouts || []).filter((c: any) => filter === 'all' || c.status === filter));
 	const admin = $derived(data.user?.role === 'admin');

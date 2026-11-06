@@ -100,8 +100,9 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--low-reasoning', action='store_true', help='Compare with low reasoning effort')
     parser.add_argument('--browser-demo', action='store_true', help='Evaluate browser link and refusal behavior without sending SMS')
+    parser.add_argument('--service-mode', action='store_true', help='Check service-first assistant behavior')
     args = parser.parse_args()
-    options = backend_options(demo=args.browser_demo)
+    options = backend_options(demo=args.browser_demo, persona='assistant' if args.service_mode else 'founder')
     if args.low_reasoning:
         options['reasoning'] = {'effort':'low'}
     cases = CASES
@@ -112,6 +113,19 @@ async def main():
             ('browser_no_discount',True,[('assistant','Möchtest du den Zehn-Prozent-Rabatt?'),('user','Nein danke, zeig mir einfach den normalen Link hier.')],'send_checkout_link',False),
             ('browser_stop',False,[('user','Ich möchte nicht weiter sprechen, bitte keine Nachrichten mehr.')],'stop_contact',None),
         ] + [case for case in CASES if case[0].startswith(('scope_', 'zendesk_send_'))]
+    if args.service_mode:
+        cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_')) or case[0] in
+            ('ready_buyer','discount_and_sms','decline_discount','retract_discount','contact_stop','future_contact_stop','wrong_person','price_no_offer')]
+        cases += [
+            ('service_checkout_issue',False,[('user','Die Zahlung hat nicht geklappt. Der Preis passt, aber meine Karte wurde abgelehnt.')],'reply_or_order_check',None),
+            ('service_mixed_hurdles',False,[('user','Ich finde es teuer und weiß nicht einmal, ob es bei mir ins Zimmer passt. Was sind die genauen Maße?')],'get_product_details',None),
+            ('service_price_only',False,[('assistant','Damit sind deine Fragen zu Material und Aufbau geklärt.'),('user','Ja, passt alles. Nur der Preis ist mir noch zu hoch.')],'get_offer',None),
+            ('service_discount_request',False,[('user','Meine Fragen sind beantwortet. Habt ihr einen Rabatt?')],'get_offer',None),
+            ('service_no_questions',False,[('user','Ich habe keine Fragen, ich habe nur kurz geschaut.')],'purchase_hurdle_question',None),
+            ('service_no_questions_known_reason',False,[('user','Der Preis ist mir zu hoch, sonst passt alles.'),('assistant','Gibt es noch eine offene Produktfrage?'),('user','Nein, ich habe keine Fragen.')],'get_offer',None),
+            ('service_ready_after_answer',False,[('assistant','Das Shirt besteht aus 100 Prozent Baumwolle.'),('user','Super, dann passt das. Schick mir den Checkout per SMS.')],'send_checkout_link',False),
+            ('service_callback_unavailable',False,[('user','Kannst du verbindlich einen Mitarbeiter-Rückruf für morgen buchen?')],'no_tools',None),
+        ]
     timings = []
     agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None, demo=args.browser_demo)
     schemas = []
@@ -132,6 +146,12 @@ async def main():
             fixture = context
             if name == 'price_no_offer':
                 fixture = {**context, 'availableDiscounts':[]}
+            if name == 'service_mixed_hurdles':
+                fixture = {**context, 'cart':{**context['cart'], 'items':[
+                    {**context['cart']['items'][0], 'title':'Test office chair', 'description':''}]},
+                    'knowledge':{**context['knowledge'], 'products':[
+                        {**context['knowledge']['products'][0], 'title':'Test office chair', 'description':'',
+                         'attributes':[], 'moreDetailsAvailable':True}]}}
             if name.startswith('product_identity_'):
                 fixture = {**context, 'cart':{**context['cart'], 'items':[
                     {**context['cart']['items'][0], 'title':'The Collection Snowboard: Liquid', 'description':''}]},
@@ -187,7 +207,12 @@ async def main():
             stops_contact = any(item.name == 'stop_contact' or
                 (item.name == 'log_outcome' and json.loads(item.arguments).get('outcome') in ('refused','wrong_person'))
                 for item in calls)
-            if expected == 'no_tools':
+            if expected == 'purchase_hurdle_question':
+                passed = not calls and '?' in result.output_text and any(word in result.output_text.lower() for word in ('bestell', 'kauf', 'abhält', 'abgehalten', 'checkout'))
+            elif expected == 'reply_or_order_check':
+                # Payment help may answer directly or check for an existing order; neither permits an offer/send.
+                passed = (not calls and bool(result.output_text)) or (len(calls)==1 and calls[0].name=='get_order_status')
+            elif expected == 'no_tools':
                 passed = not calls
             elif expected:
                 passed = len(calls)==1 and (stops_contact if expected=='stop_contact' else calls[0].name==expected)
@@ -204,7 +229,7 @@ async def main():
             if passed and name == 'product_identity_correction':
                 passed = 'The Collection Snowboard: Liquid' in result.output_text
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_')) else {})}),flush=True)
+                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_', 'service_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),

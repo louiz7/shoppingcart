@@ -73,6 +73,36 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         return s.sendLink(call,useDiscount,rows[0]?.data.eventId);
     }
 
+    await t.test('an undecided service conversation does not suppress a contact',async()=>{
+        const f=await fixture();await activate(f);const call=await fakeCall(f);
+        await s.outcome(call,{outcome:'undecided',summary:'Only browsing, no refusal or opt-out.'});
+        const {rows:[contact]}=await db.query('SELECT stopped_at,revoked_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId]);
+        assert.equal(contact.stopped_at,null);assert.equal(contact.revoked_at,null);
+        assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[call.id])).rows[0].outcome,'undecided');
+    });
+
+    await t.test('unsupported carts cannot abort other valid imports or acquire contact permission', async t => {
+        const f=await fixture();
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        const node={id:'gid://shopify/AbandonedCheckout/999',updatedAt:new Date().toISOString(),completedAt:null,
+            abandonedCheckoutUrl:`https://${f.shop.domain}/checkouts/synthetic`,
+            customer:{phone:'+4900000000002'},subtotalPriceSet:{presentmentMoney:{currencyCode:'EUR',amount:'100.00'}},
+            lineItems:{nodes:[{title:'Synthetic',quantity:1,originalUnitPriceSet:{presentmentMoney:{currencyCode:'EUR',amount:'100.00'}},
+                product:{id:'gid://shopify/Product/1',status:'ACTIVE'},variant:{id:'gid://shopify/ProductVariant/1',price:'100.00',availableForSale:true,inventoryPolicy:'CONTINUE'}}]}};
+        const foreign={...node,id:'gid://shopify/AbandonedCheckout/998',subtotalPriceSet:{presentmentMoney:{currencyCode:'CHF',amount:'100.00'}}};
+        const unsafe={...node,id:'gid://shopify/AbandonedCheckout/997',abandonedCheckoutUrl:'https://foreign.invalid/checkouts/synthetic'};
+        const list=t.mock.method(shopify,'listCheckouts',async()=>[foreign,node,unsafe]);
+        assert.deepEqual(await s.syncShop(f.customerId,f.shopId),{imported:1,skipped:2,skippedReasons:{unsupported_currency:1,invalid_checkout_host:1}});
+        const rows=await db.query('SELECT external_id,currency FROM recovery_checkouts WHERE shop_id=$1 ORDER BY external_id',[f.shopId]);
+        assert.equal(rows.rowCount,2);assert.ok(rows.rows.every(r=>r.currency==='EUR'));
+        assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_contacts WHERE shop_id=$1 AND consented_at IS NOT NULL',[f.shopId])).rows[0].n,0);
+        assert.equal((await db.query("SELECT count(*)::int AS n FROM recovery_events WHERE shop_id=$1 AND kind='checkout_sync_skipped'",[f.shopId])).rows[0].n,1);
+        list.mock.mockImplementation(async()=>[{...node,id:'not-a-checkout'}]);
+        await assert.rejects(s.syncShop(f.customerId,f.shopId),/checkout_unverified/);
+        list.mock.mockImplementation(async()=>{throw p.problem('shopify_unavailable',502);});
+        await assert.rejects(s.syncShop(f.customerId,f.shopId),/shopify_unavailable/);
+    });
+
     await t.test('post-tool speech timing validates attribution and persists separately from API latency', async () => {
         const f = await fixture(); await activate(f); const call = await fakeCall(f),token='d'.repeat(64);
         await db.query('UPDATE recovery_calls SET token_hash=$2 WHERE id=$1',[call.id,s.hash(token)]);
