@@ -97,7 +97,7 @@
 <fieldset><legend>Anruftage</legend><div class="weekdays">{#each ['Mo','Di','Mi','Do','Fr','Sa','So'] as day, i}<label class="checkbox"><input type="checkbox" name="weekdays" value={i+1} checked={shop.rules.weekdays.includes(i+1)} disabled={!admin} />{day}</label>{/each}</div></fieldset>
 <label>Standard-Zeitzone<input name="timezone" value={shop.rules.timezone} required disabled={!admin} /></label>
 <div class="form-grid">{#each [
-{ key:'delayMinutes', label:'Wartezeit nach Abbruch (Minuten)', min:30, max:1440 },
+{ key:'delayMinutes', label:'Mindestabstand zur letzten Checkout-Änderung (Minuten, 0 = sofort)', min:0, max:1440 },
 { key:'maxAttempts', label:'Maximale Versuche pro Kontakt', min:1, max:3 },
 { key:'cooldownHours', label:'Abstand zwischen Versuchen (Stunden)', min:24, max:168 },
 { key:'expiryDays', label:'Warenkorb höchstens so alt (Tage)', min:1, max:14 },

@@ -17,7 +17,7 @@ function rules(value = {}) {
     const result = { ...DEFAULT_RULES, ...value };
     if (Object.keys(value).some((key) => !Object.hasOwn(DEFAULT_RULES, key))) throw problem('unknown_rule');
     for (const [key, min, max] of [
-        ['delayMinutes', 30, 1440], ['maxAttempts', 1, 3], ['cooldownHours', 24, 168],
+        ['delayMinutes', 0, 1440], ['maxAttempts', 1, 3], ['cooldownHours', 24, 168],
         ['expiryDays', 1, 14], ['holdoutPercent', 10, 50], ['maxDiscountPercent', 0, 100],
         ['minSubtotalCents', 0, 10000000], ['offerHours', 1, 72],
         ['contributionPercent', 0, 100], ['voiceCentsPerMinute', 0, 10000],

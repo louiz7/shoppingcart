@@ -80,6 +80,17 @@ test('call policy fails closed for approval, consent, purchase, stop, and contro
     for (const [expected, mutate] of cases) { const c = context(); mutate(c); assert.equal(p.eligibility(c, NOW), expected); }
 });
 
+test('zero checkout delay permits immediate evaluation while preserving stop and purchase checks', () => {
+    const c=context();c.shop.rules={delayMinutes:0};c.checkout.source_updated_at=NOW;
+    assert.equal(p.eligibility(c,NOW),null);
+    c.checkout.completed_at=NOW;
+    assert.equal(p.eligibility(c,NOW),'already_purchased');
+    c.checkout.completed_at=null;c.contact.stopped_at=NOW;
+    assert.equal(p.eligibility(c,NOW),'contact_stopped');
+    assert.equal(p.rules().delayMinutes,60);
+    for (const delayMinutes of [-1,0.5,1441]) assert.throws(()=>p.rules({delayMinutes}),/invalid_delayMinutes/);
+});
+
 test('call windows honor contact timezone and daylight saving time', () => {
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-07-06T08:00:00Z')), true);
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-02T08:00:00Z')), false);
