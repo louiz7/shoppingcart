@@ -521,7 +521,8 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
         const id = randomUUID();
         await client.query(`INSERT INTO recovery_actions(id,checkout_id,kind,status,data) VALUES($1,$2,'sms',$3,$4)`,
         [id, call.checkout_id, shop.mode === 'simulation' ? 'simulated' : 'pending', JSON.stringify(confirmed)]);
-        return { id, authorization: confirmed, number: ctx.checkout.phone,
+        const trackingUrl=shop.mode==='live' && !article ? await require('./sms-links').create(client,id,call.id) : null;
+        return { id, authorization: confirmed, number: ctx.checkout.phone, trackingUrl,
             simulated: shop.mode === 'simulation' };
     });
     if (action.duplicate || action.simulated) return { status: action.status || 'simulated', duplicate: !!action.duplicate };
@@ -539,7 +540,7 @@ async function sendLink(call, useDiscount = false, userEventId, preparedCheckout
             if (ctx.checkout.phone !== action.number || Object.keys(action.authorization).some((key) =>
                 authorization[key] !== action.authorization[key])) throw policy.problem('sms_authorization_changed', 409);
             return article ? `${shop.brand}: Hier ist der gewünschte Hilfeartikel: ${authorization.articleUrl}` :
-                `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${authorization.checkoutUrl}`;
+                `${shop.brand}: Hier ist Ihr gewünschter Checkout-Link: ${action.trackingUrl || authorization.checkoutUrl}`;
         });
         dispatched = true;
         const sent = await telephony.sendSms(action.number, text, action.id, call.shop_id);

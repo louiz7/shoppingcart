@@ -54,6 +54,7 @@ app.use('/integrations/recovery/shopify', recovery.oauthRouter);
 app.use('/v1/recovery', authenticate, express.json({ limit: '16kb' }), recovery.merchantRouter());
 app.use('/internal/recovery/admin', express.json({ limit: '16kb' }), recovery.adminRouter);
 app.use('/internal/recovery/tools', express.json({ limit: '16kb' }), recovery.toolsRouter);
+app.use('/internal/recovery/links', express.json({ limit: '1kb' }), require('./recovery/sms-links').router());
 app.use('/internal/recovery/organizations', express.json({ limit: '4kb' }), require('./recovery/organizations').router);
 
 // Customer-facing usage API (auth via API key).

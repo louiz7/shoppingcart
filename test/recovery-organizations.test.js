@@ -160,6 +160,9 @@ test('organizations isolate registrations, sessions, internal statistics and aut
         const event=(path)=>({url:new URL(`http://localhost${path}`),request:{method:'GET'},locals:{},cookies:cookies()});
         for(const path of ['/campaigns','/admin/organizations','/email'])await assert.rejects(hooks.handle({event:event(path),resolve:()=>true}),error=>error.status===404);
         for(const path of ['/register','/login','/_app/immutable/code.js','/figma/logo.svg'])assert.equal(await hooks.handle({event:event(path),resolve:()=>true}),true);
+        const publicLink=event('/r/'+'a'.repeat(64));
+        const response=await hooks.handle({event:publicLink,resolve:()=>({headers:new Map()})});
+        assert.equal(response.headers.get('Cache-Control'),'no-store');assert.equal(publicLink.locals.user,null);
         await assert.rejects(hooks.handle({event:event('/recovery'),resolve:()=>true}),error=>error.status===303 && error.location.startsWith('/login?next='));
     });
 });

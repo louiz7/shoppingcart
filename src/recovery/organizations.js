@@ -104,15 +104,17 @@ async function overview(customerId,userId) {
                 WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL
                 AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                 AND (o.recovery_checkout_id=checkout.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id))) AS orders
+        ,(SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=s.id AND o.paid AND NOT o.is_test
+            AND o.currency=s.currency AND o.sms_link_opened_at IS NOT NULL) AS sms_link_orders
         FROM recovery_shops s WHERE s.mode='live' ORDER BY s.brand,s.id`);
     const groups=organizations.rows.map((org)=>({id:org.id,name:org.name,isInternal:org.is_rescova_internal,active:org.is_active,
         shops:shops.rows.filter((shop)=>shop.customer_id===org.id).map((shop)=>({id:shop.id,brand:shop.brand,domain:shop.domain,
             currency:shop.currency,enabled:shop.enabled,calls:shop.calls,connectedMinutes:shop.minutes,unknownDurationCalls:shop.unknown_duration,
-            attributedRevenueCents:shop.revenue,confirmedOrders:shop.orders}))}));
-    const totals={organizations:groups.length,shops:shops.rowCount,calls:0,connectedMinutes:0,unknownDurationCalls:0,
+            attributedRevenueCents:shop.revenue,confirmedOrders:shop.orders,smsLinkOrders:shop.sms_link_orders}))}));
+    const totals={smsLinkOrders:0,organizations:groups.length,shops:shops.rowCount,calls:0,connectedMinutes:0,unknownDurationCalls:0,
         attributedRevenue:['EUR','USD'].map((currency)=>({currency,amountCents:0,orders:0}))};
     for (const org of groups) for (const shop of org.shops) {
-        totals.calls+=shop.calls;totals.connectedMinutes+=shop.connectedMinutes;totals.unknownDurationCalls+=shop.unknownDurationCalls;
+        totals.smsLinkOrders+=shop.smsLinkOrders;totals.calls+=shop.calls;totals.connectedMinutes+=shop.connectedMinutes;totals.unknownDurationCalls+=shop.unknownDurationCalls;
         const money=totals.attributedRevenue.find((value)=>value.currency===shop.currency);
         money.amountCents+=shop.attributedRevenueCents;money.orders+=shop.confirmedOrders;
     }

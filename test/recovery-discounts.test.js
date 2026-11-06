@@ -8,6 +8,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
     skip: process.env.RECOVERY_DB_TEST!=='1',timeout: 30000,
 }, async (t) => {
     require('dotenv').config();
+    process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
     const url = new URL(process.env.DATABASE_URL);
     assert.equal(url.hostname,'127.0.0.1'); assert.equal(url.port,'55433'); assert.equal(url.pathname,'/shoppingcart');
     const { db,transaction } = require('../src/recovery/store');
@@ -145,7 +146,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         await service.recordTranscript(call,{role:'user',eventId:randomUUID(),text:'Ja, gerne. Schick mir den Link mit diesem Rabatt.'});
         const before=sms.mock.calls.length;
         assert.equal((await sendLink(call,true)).status,'accepted');
-        assert.equal(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).searchParams.get('discount'),'RETURN10');
+        assert.equal(new URL(await require('../src/recovery/sms-links').resolve(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false)).searchParams.get('discount'),'RETURN10');
     });
     await t.test('merchant terms can exceed old defaults while explicit shop limits remain binding',async () => {
         const f = await fixture();
@@ -205,7 +206,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         const before = sms.mock.calls.length;
         assert.deepEqual(await sendLink(call, true),{status: 'accepted',delivered: false});
         assert.equal(sms.mock.calls.length,before+1); assert.equal(adHoc.mock.calls.length,0);
-        assert.equal(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).searchParams.get('discount'),'RETURN10');
+        assert.equal(new URL(await require('../src/recovery/sms-links').resolve(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false)).searchParams.get('discount'),'RETURN10');
     });
     await t.test('an available or merely prepared discount is never added to the default SMS link',async () => {
         for (const prepared of [false,true]) {
@@ -215,7 +216,7 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
             const before = sms.mock.calls.length;
             if (prepared) await assert.rejects(sendLink(call,true),/discount_review_required/);
             await sendLink(call);
-            const link = new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1));
+            const link = new URL(await require('../src/recovery/sms-links').resolve(new URL(sms.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false));
             assert.equal(link.searchParams.has('discount'),false);
         }
     });

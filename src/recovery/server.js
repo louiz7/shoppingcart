@@ -33,6 +33,7 @@ function createApp() {
         catch { return res.sendStatus(500); }
     });
     app.use('/integrations/recovery/shopify', routes.oauthRouter);
+    app.use('/internal/recovery/links', express.json({ limit: '1kb' }), require('./sms-links').router());
     app.use('/internal/recovery/demo', express.json({ limit: '16kb' }), require('./public-demo').router());
     app.use('/internal/recovery/admin', express.json({ limit: '16kb' }), routes.adminRouter);
     app.use('/internal/recovery/tools', express.json({ limit: '16kb' }), routes.toolsRouter);

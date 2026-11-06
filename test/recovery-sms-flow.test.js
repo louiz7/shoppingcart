@@ -50,6 +50,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
     skip: process.env.RECOVERY_DB_TEST !== '1', timeout: 30000,
 }, async (t) => {
     require('dotenv').config();
+    process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
     const database = new URL(process.env.DATABASE_URL);
     assert.equal(database.hostname, '127.0.0.1'); assert.equal(database.port, '55433'); assert.equal(database.pathname, '/shoppingcart');
     const { db, transaction } = require('../src/recovery/store');
@@ -194,7 +195,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         assert.deepEqual(await sendLink(f.call), { status: 'accepted', duplicate: true });
         assert.equal(send.mock.calls.length, before+1);
         assert.equal(send.mock.calls[before].arguments[0], f.snapshot.phone);
-        assert.equal(send.mock.calls[before].arguments[1], `Test shop: Hier ist Ihr gewünschter Checkout-Link: ${f.snapshot.checkoutUrl}`);
+        assert.equal(await require('../src/recovery/sms-links').resolve(new URL(send.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false),f.snapshot.checkoutUrl);
         assert.equal((await db.query(`SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [f.checkoutId])).rows[0].n, 0);
     });
     await t.test('plain links strip discount parameters while preserving the original checkout token', async () => {
@@ -203,7 +204,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         await db.query("UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{checkoutUrl}',to_jsonb($2::text)) WHERE id=$1",[f.checkoutId,original]);
         await assert.rejects(sendLink(f.call,'true'),/invalid_discount_selection/);
         await sendLink(f.call,false);
-        const link = new URL(send.mock.calls[before].arguments[1].split(' ').at(-1));
+        const link = new URL(await require('../src/recovery/sms-links').resolve(new URL(send.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false));
         assert.equal(link.searchParams.has('discount'),false);
         assert.equal(link.searchParams.get('key'),'synthetic');
     });

@@ -16,6 +16,8 @@ async function ingestShopify(shop, topic, payload, eventId) {
             ON CONFLICT DO NOTHING RETURNING event_id`, [shop.id, eventId]);
         if (!inserted.rowCount) return { duplicate: true };
         if (topic === 'app/uninstalled' || topic === 'shop/redact') {
+            await client.query(`DELETE FROM recovery_sms_links l USING recovery_actions a,recovery_checkouts c
+                WHERE l.action_id=a.id AND a.checkout_id=c.id AND c.shop_id=$1`,[shop.id]);
             await client.query(`UPDATE recovery_shops SET enabled=FALSE,approved_at=NULL,credentials_encrypted=NULL,webhooks_ready=FALSE WHERE id=$1`, [shop.id]);
             if (topic === 'shop/redact') {
                 await client.query(`UPDATE recovery_contacts SET phone='',evidence=NULL,consented_at=NULL,
@@ -27,6 +29,8 @@ async function ingestShopify(shop, topic, payload, eventId) {
             }
         } else if (topic === 'customers/redact') {
             const customerId = `gid://shopify/Customer/${payload.customer?.id}`;
+            await client.query(`DELETE FROM recovery_sms_links l USING recovery_actions a,recovery_checkouts c
+                WHERE l.action_id=a.id AND a.checkout_id=c.id AND c.shop_id=$1 AND c.snapshot->>'customerId'=$2`,[shop.id,customerId]);
             // Preserve only non-reversible suppression hashes; remove identifying history.
             await client.query(`UPDATE recovery_contacts p SET phone='',evidence=NULL,consented_at=NULL,stopped_at=NOW(),
                 revoked_at=NOW(),stop_reason='privacy_redaction' WHERE shop_id=$1 AND contact_key IN
@@ -65,6 +69,7 @@ async function ingestShopify(shop, topic, payload, eventId) {
             await client.query(`UPDATE recovery_orders o SET recovery_checkout_id=c.id FROM recovery_checkouts c
                 WHERE o.shop_id=$1 AND o.external_id=$2 AND o.recovery_checkout_id IS NULL AND c.shop_id=o.shop_id AND
                 ((o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id)`,[shop.id,String(payload.id)]);
+            await require('./sms-links').attributeOrder(client,shop,payload);
             await client.query(`UPDATE recovery_checkouts c SET completed_at=COALESCE(c.completed_at,$2),status='converted'
                 FROM recovery_orders o WHERE o.shop_id=$1 AND o.external_id=$3 AND c.shop_id=o.shop_id AND
                 (o.recovery_checkout_id=c.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=c.checkout_token) OR o.checkout_external_id=c.external_id OR

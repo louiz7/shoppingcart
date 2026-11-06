@@ -46,6 +46,7 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
     skip:process.env.RECOVERY_DB_TEST!=='1',timeout:30000,
 },async t=>{
     require('dotenv').config();
+    process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
     const url=new URL(process.env.DATABASE_URL);assert.equal(url.hostname,'127.0.0.1');assert.equal(url.port,'55433');assert.equal(url.pathname,'/shoppingcart');
     const {db,transaction}=require('../src/recovery/store'),service=require('../src/recovery/service'),policy=require('../src/recovery/policy');
     const discounts=require('../src/recovery/discounts'),telephony=require('../src/recovery/telephony'),hooks=require('../src/recovery/webhooks');
@@ -123,7 +124,7 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
         const consent=await review(f.call);
         const results=await Promise.all([service.sendLink(f.call,false,consent,p.preparedCheckoutId),service.sendLink(f.call,false,consent,p.preparedCheckoutId)]);
         assert.equal(results.filter(r=>r.duplicate).length,1);assert.equal(send.mock.calls.length,before+1);
-        const link=new URL(send.mock.calls.at(-1).arguments[1].split(' ').at(-1));assert.equal(link.pathname,'/cart/2:1');assert.equal(link.searchParams.has('discount'),false);
+        const link=new URL(await require('../src/recovery/sms-links').resolve(new URL(send.mock.calls.at(-1).arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false));assert.equal(link.pathname,'/cart/2:1');assert.equal(link.searchParams.has('discount'),false);
         assert.deepEqual((await db.query('SELECT snapshot FROM recovery_checkouts WHERE id=$1',[f.call.checkout_id])).rows[0].snapshot,f.snapshot);
         const payload={id:'501',created_at:new Date().toISOString(),updated_at:new Date().toISOString(),currency:'EUR',current_subtotal_price:'80.00',financial_status:'paid',phone:f.snapshot.phone,
             checkout_id:'999',checkout_token:'new-checkout',line_items:[{variant_id:2,quantity:1}],note_attributes:[{name:'rescova_recovery',value:p.preparedCheckoutId}]};
@@ -156,7 +157,7 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
         assert.equal(discounted.offer.merchandiseTotalCents,7200);
         await assert.rejects(service.sendLink(f.call,true,consent,discounted.preparedCheckoutId),/checkout_review_required/);
         await service.sendLink(f.call,true,await review(f.call,'Mit 10 Prozent sind es 72 Euro. Soll ich dir diesen Checkout mit Rabatt per SMS schicken?'),discounted.preparedCheckoutId);
-        assert.equal(new URL(send.mock.calls.at(-1).arguments[1].split(' ').at(-1)).searchParams.get('discount'),'APPROVED10');
+        assert.equal(new URL(await require('../src/recovery/sms-links').resolve(new URL(send.mock.calls.at(-1).arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false)).searchParams.get('discount'),'APPROVED10');
     });
     await t.test('changed selected product can be sent after an earlier original link; no duplicate on retry',async()=>{
         const f=await fixture(),before=send.mock.calls.length;
