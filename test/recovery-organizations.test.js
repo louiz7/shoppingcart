@@ -120,6 +120,8 @@ test('organizations isolate registrations, sessions, internal statistics and aut
         const known=await call(eur,ec);await call(eur,ec);await call(eur,ec,'simulated');await call(usd,uc);await call(other,oc,'ended',true);
         await order(eur,ec,'EUR',1000);await order(eur,ec,'EUR',9000,true);await order(usd,uc,'USD',2200);await order(other,oc,'USD',3300);
         const at=Math.floor(Date.now()/1000)-3600;
+        // Let the signed event establish the start; a separate fixture clock can cross a second boundary.
+        await db.query('UPDATE recovery_calls SET connected_at=NULL WHERE id=$1',[known]);
         await hooks.lifecycle({event:'participant_joined',room:{name:`recovery-${known}`},participant:{kind:3,attributes:{'sip.callStatus':'active'}},createdAt:at});
         await hooks.lifecycle({event:'participant_left',room:{name:`recovery-${known}`},participant:{kind:3},createdAt:at+60});
         await hooks.lifecycle({event:'room_finished',room:{name:`recovery-${known}`},createdAt:at+120});
