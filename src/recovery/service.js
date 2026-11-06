@@ -304,14 +304,9 @@ async function endCall(call) {
 
 async function getContext(call) {
     // Legacy identity_verified records permission to continue this conversation, not verified personal identity.
-    if (!call.identity_verified) {
-        const shop = await shopFor(call.customer_id, call.shop_id);
-        const ctx = await state(db, shop, call.checkout_id);
-        const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
-        if (denied) throw policy.problem(denied, 409);
-        return { brand: shop.brand, brandVoice: shop.brand_voice, agentProfile: agentProfile.forShop(shop), contactConfirmed: false };
-    }
-    const ctx = await refresh(call.customer_id, call.shop_id, call.checkout_id);
+    // startCall refreshed this snapshot before dialing. The opening can use its product data without another Shopify round trip.
+    const ctx = call.identity_verified ? await refresh(call.customer_id, call.shop_id, call.checkout_id) :
+        await require('./catalog').authorized(call,db,false,false);
     const denied = policy.eligibility(ctx, new Date(), 'action',call.is_test===true);
     if (denied) throw policy.problem(denied, 409);
     const [knowledge,availableDiscounts] = await Promise.all([
@@ -319,11 +314,12 @@ async function getContext(call) {
         discounts.available(ctx.shop,ctx.checkout.subtotal_cents),
     ]);
     // Contact permission can change while Shopify is responding.
-    await require('./catalog').authorized(call);
-    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop), contactConfirmed: true,
+    await require('./catalog').authorized(call,db,false,Boolean(call.identity_verified));
+    const cart = { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
+        shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' };
+    return { brand: ctx.shop.brand, brandVoice: ctx.shop.brand_voice, agentProfile: agentProfile.forShop(ctx.shop,cart), contactConfirmed: Boolean(call.identity_verified),
         supportEmail: ctx.checkout.snapshot.supportEmail || null,
-        cart: { currency: ctx.checkout.currency, subtotalCents: ctx.checkout.subtotal_cents, items: ctx.checkout.snapshot.items,
-            shipping: 'unknown_until_checkout', taxes: 'unknown_until_checkout' }, verifiedAt: ctx.checkout.verified_at,
+        cart, verifiedAt: ctx.checkout.verified_at,
         maxDiscountPercent: policy.rules(ctx.shop.rules).maxDiscountPercent,
         availableDiscounts,knowledge };
 }

@@ -117,6 +117,9 @@ async def main():
         cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_')) or case[0] in
             ('ready_buyer','discount_and_sms','decline_discount','retract_discount','contact_stop','future_contact_stop','wrong_person','price_no_offer')]
         cases += [
+            ('startup_item',False,[('user','Was genau habe ich im Warenkorb?')],'no_tools',None),
+            ('startup_price',False,[('user','Was kostet das Shirt nochmal?')],'no_tools',None),
+            ('startup_changed',False,[('user','Ich habe den Warenkorb gerade geändert, schau bitte nach, was jetzt drin ist.')],'get_cart_context',None),
             ('service_checkout_issue',False,[('user','Die Zahlung hat nicht geklappt. Der Preis passt, aber meine Karte wurde abgelehnt.')],'reply_or_order_check',None),
             ('service_mixed_hurdles',False,[('user','Ich finde es teuer und weiß nicht einmal, ob es bei mir ins Zimmer passt. Was sind die genauen Maße?')],'get_product_details',None),
             ('service_price_only',False,[('assistant','Damit sind deine Fragen zu Material und Aufbau geklärt.'),('user','Ja, passt alles. Nur der Preis ist mir noch zu hoch.')],'get_offer',None),
@@ -193,13 +196,17 @@ async def main():
             history = [{'type':'function_call','call_id':'fixture_context',
                         'name':'confirm_contact' if name == 'quality_after_confirm' else 'get_cart_context','arguments':'{}'},
                        {'type':'function_call_output','call_id':'fixture_context','output':json.dumps(fixture)}]
+            request_options = options
+            if name.startswith('startup_'):
+                history = []
+                request_options = backend_options(persona='assistant',initial=fixture)
             if prepared:
                 history += [{'type':'function_call','call_id':'fixture_offer','name':'get_offer','arguments':'{"discount_id":"synthetic-discount"}'},
                             {'type':'function_call_output','call_id':'fixture_offer','output':json.dumps({'percent':10,'code':'SYNTHETIC10','merchandiseTotalCents':9000,'currency':'EUR'})}]
             history += [{'role':role,'content':text} for role,text in dialog]
             async with limits:
                 start = time.monotonic()
-                result = await client.responses.create(**options, input=history, tools=schemas, store=False)
+                result = await client.responses.create(**request_options, input=history, tools=schemas, store=False)
                 elapsed = round((time.monotonic()-start)*1000)
                 timings.append(elapsed)
             calls = [item for item in result.output if item.type == 'function_call']
@@ -226,6 +233,10 @@ async def main():
                 passed = json.loads(calls[0].arguments) == {'variant_id':'gid://shopify/ProductVariant/1','article_id':'55625611695123'}
             if passed and expected == 'get_offer':
                 passed = json.loads(calls[0].arguments).get('discount_id') == 'synthetic-discount'
+            if passed and name == 'startup_item':
+                passed = 'shirt' in result.output_text.lower()
+            if passed and name == 'startup_price':
+                passed = '100' in result.output_text
             if passed and name == 'product_identity_correction':
                 passed = 'The Collection Snowboard: Liquid' in result.output_text
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],

@@ -62,7 +62,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         [id, f.shopId, f.checkoutId, p.contactKey(f.shopId, f.snapshot.phone), `recovery-${id}`, randomUUID()]);
         return { id, shop_id: f.shopId, checkout_id: f.checkoutId, customer_id: f.customerId, identity_verified: true };
     }
-    t.mock.method(shopify, 'refreshCheckout', async (shop, externalId) => {
+    const refreshCheckout = t.mock.method(shopify, 'refreshCheckout', async (shop, externalId) => {
         const r = await db.query('SELECT snapshot FROM recovery_checkouts WHERE shop_id=$1 AND external_id=$2', [shop.id, externalId]);
         return r.rows[0].snapshot;
     });
@@ -369,13 +369,22 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         await assert.rejects(s.startCall(f.customerId,f.shopId,next.id),/contact_stopped/);
     });
 
-    await t.test('product information stays hidden until conversation permission is grounded in transcripts', async () => {
+    await t.test('verified startup cart needs no Shopify reload while actions still require conversation permission', async () => {
         const f = await fixture(); await activate(f); const call = { ...await fakeCall(f), identity_verified: false };
         await db.query('UPDATE recovery_calls SET identity_verified=FALSE WHERE id=$1',[call.id]);
         await db.query(`UPDATE recovery_checkouts SET snapshot=jsonb_set(snapshot,'{supportEmail}','"support@example.invalid"') WHERE id=$1`,[f.checkoutId]);
+        const before = refreshCheckout.mock.calls.length;
         const initial = await s.getContext(call);
-        assert.equal(initial.cart, undefined); assert.equal(initial.contactConfirmed, false);
-        assert.equal(initial.supportEmail,undefined);
+        assert.deepEqual(initial.cart.items,f.snapshot.items); assert.equal(initial.contactConfirmed,false);
+        assert.equal(initial.supportEmail,'support@example.invalid');
+        assert.equal(refreshCheckout.mock.calls.length,before);
+        for (const privateValue of [f.snapshot.phone,f.snapshot.email,f.snapshot.checkoutUrl,f.snapshot.customerId]) {
+            assert.equal(JSON.stringify(initial).includes(privateValue),false);
+        }
+        await assert.rejects(s.getContext({...call,customer_id:-1}),/shop_not_found/);
+        await assert.rejects(s.getContext({...call,id:randomUUID()}),/call_authorization_changed/);
+        await assert.rejects(require('../src/recovery/catalog').authorized(call),/call_authorization_changed/);
+        await assert.rejects(s.sendLink(call,false,randomUUID()),/contact_confirmation_required/);
         await assert.rejects(s.getOffer(call, 10), /contact_confirmation_required/);
         await assert.rejects(s.confirmContact(call), /conversation_evidence_required/);
         await s.recordTranscript(call, { role: 'assistant',eventId: randomUUID(),text: 'Passt es gerade kurz?' });
@@ -389,6 +398,17 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.equal((await s.confirmContact(call,userEventId)).contactConfirmed, true);
         assert.equal((await db.query('SELECT identity_verified FROM recovery_calls WHERE id=$1',[call.id])).rows[0].identity_verified,true);
         assert.equal((await s.getContext({ ...call,identity_verified:true })).supportEmail,'support@example.invalid');
+    });
+
+    await t.test('startup context rejects ended, expired and opted-out calls', async () => {
+        const f=await fixture();await activate(f);const call={...await fakeCall(f),identity_verified:false};
+        await db.query('UPDATE recovery_calls SET identity_verified=FALSE,expires_at=NOW() WHERE id=$1',[call.id]);
+        await assert.rejects(s.getContext(call),/call_authorization_changed/);
+        await db.query("UPDATE recovery_calls SET expires_at=NOW()+INTERVAL '10 minutes',ended_at=NOW() WHERE id=$1",[call.id]);
+        await assert.rejects(s.getContext(call),/call_authorization_changed/);
+        await db.query('UPDATE recovery_calls SET ended_at=NULL WHERE id=$1',[call.id]);
+        await s.stopContact(f.customerId,f.shopId,f.checkoutId);
+        await assert.rejects(s.getContext(call),/contact_stopped/);
     });
 
     await t.test('offers are single-use intents and stale carts invalidate the existing quote', async () => {

@@ -66,15 +66,15 @@ async function snapshot(shop, items) {
     return { currency: currency(data,shop), subtotalCents, discountCodes: [], items: lines };
 }
 
-async function authorized(call, client = db, lock = false) {
+async function authorized(call, client = db, lock = false, conversationRequired = true) {
     const service = require('./service');
     const shop = await service.shopFor(call.customer_id,call.shop_id,client,lock);
     const ctx = await service.state(client,shop,call.checkout_id,lock);
     const denied = policy.eligibility(ctx,new Date(),'action',call.is_test === true);
     if (denied) throw policy.problem(denied,409);
     const result = await client.query(`SELECT 1 FROM recovery_calls WHERE id=$1 AND shop_id=$2 AND checkout_id=$3
-        AND contact_key=$4 AND identity_verified AND expires_at>NOW() AND ended_at IS NULL
-        AND status IN ('reserved','dialing','connected')`,[call.id,shop.id,call.checkout_id,ctx.checkout.contact_key]);
+        AND contact_key=$4 AND (NOT $5 OR identity_verified) AND expires_at>NOW() AND ended_at IS NULL
+        AND status IN ('reserved','dialing','connected')`,[call.id,shop.id,call.checkout_id,ctx.checkout.contact_key,conversationRequired]);
     if (!result.rowCount) throw policy.problem('call_authorization_changed',409);
     return ctx;
 }

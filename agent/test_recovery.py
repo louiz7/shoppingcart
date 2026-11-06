@@ -400,6 +400,28 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertEqual(json.loads(await agent.confirm_contact(None))['error'],'conversation_changed')
         self.assertEqual(agent.tool.await_count,1)
 
+    async def test_preloaded_cart_reaches_voice_and_reasoning_without_confirmation_reload(self):
+        profile = {'name':'Lea','persona':'assistant','voice':'female','language':'de',
+            'greeting':'Hey, hier ist Lea, die digitale KI-Assistentin von Synthetic. Ich rufe wegen MOVE Schwarz an.'}
+        ctx,http,session = self.fixture(profile=profile)
+        http.initial.update({'cart':{'currency':'EUR','subtotalCents':24900,
+            'items':[{'title':'MOVE Schwarz','quantity':1,'variantId':'gid://shopify/ProductVariant/1'}]},
+            'contactConfirmed':False,'email':'private@example.invalid','checkoutUrl':'https://private.invalid/token'})
+        agent = self.module.RecoveryAgent('test',http.initial,http)
+        agent.tool = AsyncMock(return_value='{"contactConfirmed":true}')
+        self.assertTrue(json.loads(await agent.confirm_contact(None))['contactConfirmed'])
+        agent.tool.assert_awaited_once_with('confirm_contact',context=None)
+        with patch.object(self.module.aiohttp,'ClientSession',return_value=http), \
+                patch.object(self.module.openai.realtime,'GPTLiveModel',return_value=object()) as model, \
+                patch.object(self.module,'AgentSession',return_value=session):
+            await asyncio.wait_for(self.module.entrypoint(ctx),2)
+        for prompt in [agent.instructions,model.call_args.kwargs['responses_options']['instructions']]:
+            self.assertIn('MOVE Schwarz',prompt)
+            self.assertIn('24900',prompt)
+            self.assertNotIn('private@example.invalid',prompt)
+            self.assertNotIn('https://private.invalid/token',prompt)
+        self.assertIn('MOVE Schwarz',session.greeting_options['instructions'])
+
     async def test_tool_to_next_speech_metric_is_recorded_once_without_replacing_response_metric(self):
         ctx,http,session = self.fixture(finish='tool_latency')
         await self.run_fixture(ctx,http,session)

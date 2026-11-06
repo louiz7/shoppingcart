@@ -66,3 +66,19 @@ test('agent profiles persist only for a shop owner admin and stay isolated by te
     }
     assert.deepEqual((await discounts.settings(f.customerId)).shops[0].agentProfile,saved.agentProfile);
 });
+
+test('assistant introduces the verified cart item in either language with a generic empty-cart fallback', () => {
+    for (const language of ['de','en']) {
+        const shop={brand:'Synthetic',agent_profile:{name:'Lea',persona:'assistant',voice:'female',language}};
+        const cart={items:[{title:'MOVE Schwarz'}]};
+        const greeting=profile.forShop(shop,cart).greeting;
+        assert.match(greeting,/MOVE Schwarz/);
+        assert.match(greeting,language==='de'?/Warenkorb/:/your cart/);
+        assert.match(greeting,language==='de'?/digitale KI-Assistentin/:/digital AI assistant/);
+        const multiple=profile.forShop(shop,{items:[...cart.items,{title:'DESK Pro'}]}).greeting;
+        assert.match(multiple,language==='de'?/unter anderem MOVE Schwarz/:/MOVE Schwarz and the other items/);
+        for (const empty of [null,{items:[]},{items:[{}]}]) {
+            assert.doesNotMatch(profile.forShop(shop,empty).greeting,/undefined|null|MOVE/);
+        }
+    }
+});

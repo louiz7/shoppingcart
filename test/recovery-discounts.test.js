@@ -184,12 +184,13 @@ test('merchant approved Shopify discounts persist consent, exactly-once creation
         finally { mutationFailure = null; }
         assert.equal((await discounts.create(rejected.customerId,rejected.shopId,rejected.input)).discount.status,'failed');
     });
-    await t.test('identity-gated agent context and selected offer derive percent and code from the approved catalog',async () => {
+    await t.test('startup context and selected offer derive percent and code from the approved catalog',async () => {
         const f = await fixture(),approved = (await discounts.create(f.customerId,f.shopId,f.input)).discount,call = await caller(f);
         const profile = { name: 'Alex',persona: 'founder',voice: 'female',language: 'en' };
         await db.query('UPDATE recovery_shops SET agent_profile=$2 WHERE id=$1',[f.shopId,JSON.stringify(profile)]);
         const anonymous = await service.getContext({ ...call,identity_verified: false }),identified = await service.getContext(call);
-        assert.equal(anonymous.availableDiscounts,undefined);
+        assert.deepEqual(anonymous.availableDiscounts,[approved]);
+        assert.equal(anonymous.contactConfirmed,false);
         assert.deepEqual(anonymous.agentProfile,require('../src/recovery/agent-profile').forShop({ ...f.shop,agent_profile: profile }));
         assert.deepEqual(identified.agentProfile,anonymous.agentProfile);
         assert.deepEqual(identified.availableDiscounts,[approved]);

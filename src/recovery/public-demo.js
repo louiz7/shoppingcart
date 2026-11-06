@@ -39,7 +39,7 @@ async function source() {
         if (!checkout || checkout.lineItems.pageInfo.hasNextPage) throw policy.problem('demo_cart_unavailable',503);
         const cart=await catalog.snapshot(shop,checkout.lineItems.nodes.map(i=>({variantId:i.variant?.id,quantity:i.quantity})));
         const [details,availableDiscounts]=await Promise.all([knowledge.forCart(shop,cart.items,true),discounts.available(shop,cart.subtotalCents)]);
-        const agentProfile=require('./agent-profile').forShop(shop);
+        const agentProfile=require('./agent-profile').forShop(shop,cart);
         // Founder roleplay is confined to the explicitly labelled AI browser demo.
         if(agentProfile.persona==='founder') agentProfile.greeting=agentProfile.language==='de'
             ? `Hey, hier ist ${agentProfile.name}, Gründer von ${shop.brand}. Ich hab gesehen, dass du gerade bei uns im Shop unterwegs warst. Hast du noch Fragen zu den Produkten, bei denen ich dir helfen kann?`
@@ -133,7 +133,7 @@ async function tool(token,name,input={}) {
                 else{s.assistantSeq=s.seq;s.interrupted=input.interrupted===true;}}
             result={recorded:true}; // Only provenance/order, never transcript text or customer data.
         } else if(name==='latency') result={recorded:true};
-        else if(name==='connected') result={brand:s.context.brand,brandVoice:s.context.brandVoice,agentProfile:s.context.agentProfile,demo:true};
+        else if(name==='connected') result={...s.context,demo:true};
         else if(name==='confirm_contact'){consent(s,input.userEventId);s.context.contactConfirmed=true;result={contactConfirmed:true};}
         else {
             if(!s.context.contactConfirmed && !['stop','outcome'].includes(name)) throw policy.problem('contact_confirmation_required',409);

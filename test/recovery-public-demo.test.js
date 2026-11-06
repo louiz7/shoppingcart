@@ -29,6 +29,10 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  await assert.rejects(demo.tool(browser,'context'),{code:'invalid_demo_session'});
  await assert.rejects(demo.status(token),{code:'invalid_demo_session'});
  await assert.rejects(demo.tool(token,'context'),{code:'contact_confirmation_required'});
+ const initial=await demo.tool(token,'connected');
+ assert.deepEqual(initial.cart,cart);assert.equal(initial.contactConfirmed,false);
+ await assert.rejects(demo.tool(token,'offer',{percent:10}),{code:'contact_confirmation_required'});
+ await assert.rejects(demo.tool(browser,'connected'),{code:'invalid_demo_session'});
  let user=await message('user');await message('assistant');await demo.tool(token,'confirm_contact',{userEventId:user});
  assert.equal((await demo.tool(token,'context')).cart.items[0].title,'Test item');
  await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:randomUUID()}),{code:'conversation_changed'});
