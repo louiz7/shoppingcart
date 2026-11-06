@@ -51,6 +51,7 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
 }, async (t) => {
     require('dotenv').config();
     process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
+    process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED='1';
     const database = new URL(process.env.DATABASE_URL);
     assert.equal(database.hostname, '127.0.0.1'); assert.equal(database.port, '55433'); assert.equal(database.pathname, '/shoppingcart');
     const { db, transaction } = require('../src/recovery/store');
@@ -197,6 +198,16 @@ test('native checkout SMS needs no discount and remains bound to the verified ca
         assert.equal(send.mock.calls[before].arguments[0], f.snapshot.phone);
         assert.equal(await require('../src/recovery/sms-links').resolve(new URL(send.mock.calls[before].arguments[1].split(' ').at(-1)).pathname.split('/').at(-1),false),f.snapshot.checkoutUrl);
         assert.equal((await db.query(`SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1 AND kind='offer'`, [f.checkoutId])).rows[0].n, 0);
+    });
+    await t.test('tracking defaults off: send the direct shop URL and create no tracking record',async()=>{
+        delete process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED;
+        try {
+            const f=await fixture(),before=send.mock.calls.length;
+            await sendLink(f.call);
+            assert.equal(send.mock.calls[before].arguments[1],`Test shop: Hier ist Ihr gewünschter Checkout-Link: ${f.snapshot.checkoutUrl}`);
+            const {rows:[row]}=await db.query('SELECT count(*)::int AS n FROM recovery_sms_links l JOIN recovery_actions a ON a.id=l.action_id WHERE a.checkout_id=$1',[f.checkoutId]);
+            assert.equal(row.n,0);
+        } finally {process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED='1';}
     });
     await t.test('plain links strip discount parameters while preserving the original checkout token', async () => {
         const f = await fixture(), before = send.mock.calls.length;

@@ -118,7 +118,7 @@ async function overview(customerId,userId) {
         const money=totals.attributedRevenue.find((value)=>value.currency===shop.currency);
         money.amountCents+=shop.attributedRevenueCents;money.orders+=shop.confirmedOrders;
     }
-    return {asOf:new Date().toISOString(),totals,organizations:groups};
+    return {asOf:new Date().toISOString(),smsLinkTrackingEnabled:require('./sms-links').enabled(),totals,organizations:groups};
 }
 
 const router=express.Router();

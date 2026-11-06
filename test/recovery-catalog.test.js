@@ -47,6 +47,7 @@ test('alternative checkout complete path, corrections, discounts, SMS dedupe and
 },async t=>{
     require('dotenv').config();
     process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
+    process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED='1';
     const url=new URL(process.env.DATABASE_URL);assert.equal(url.hostname,'127.0.0.1');assert.equal(url.port,'55433');assert.equal(url.pathname,'/shoppingcart');
     const {db,transaction}=require('../src/recovery/store'),service=require('../src/recovery/service'),policy=require('../src/recovery/policy');
     const discounts=require('../src/recovery/discounts'),telephony=require('../src/recovery/telephony'),hooks=require('../src/recovery/webhooks');

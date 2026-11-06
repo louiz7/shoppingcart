@@ -3,8 +3,10 @@ const {randomBytes,createHash}=require('node:crypto');
 const {transaction}=require('./store');
 const {problem,checkoutUrl}=require('./policy');
 const hash=value=>createHash('sha256').update(value).digest('hex');
+const enabled=()=>process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED==='1';
 
 async function create(client,actionId,callId) {
+    if(!enabled()) return null;
     const base=new URL(process.env.RECOVERY_PUBLIC_URL);
     if(base.protocol!=='https:' || base.username || base.password || base.port) throw problem('sms_not_configured',503);
     const token=randomBytes(32).toString('hex');
@@ -26,7 +28,7 @@ async function resolve(token,recordOpen=true) {
             AND a.data->>'messageType' IS DISTINCT FROM 'help_article' FOR UPDATE OF l`,[hash(token)]);
         if(!row) throw problem('link_not_found',404);
         const destination=checkoutUrl(row.data.checkoutUrl,row);
-        if(recordOpen) await client.query('UPDATE recovery_sms_links SET first_opened_at=COALESCE(first_opened_at,NOW()) WHERE action_id=$1',[row.action_id]);
+        if(recordOpen && enabled()) await client.query('UPDATE recovery_sms_links SET first_opened_at=COALESCE(first_opened_at,NOW()) WHERE action_id=$1',[row.action_id]);
         return destination;
     });
 }
@@ -60,4 +62,4 @@ function router() {
     }));
     return route;
 }
-module.exports={create,resolve,attributeOrder,router};
+module.exports={create,resolve,attributeOrder,router,enabled};

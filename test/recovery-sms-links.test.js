@@ -23,6 +23,7 @@ test('tracked checkout links preserve targets and attribute only opened, subsequ
     require('dotenv').config();const url=new URL(process.env.DATABASE_URL);
     assert.equal(url.hostname,'127.0.0.1');assert.equal(url.port,'55433');assert.equal(url.pathname,'/shoppingcart');
     process.env.RECOVERY_PUBLIC_URL='https://recovery.example.invalid';
+    process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED='1';
     const {db}=require('../src/recovery/store'),links=require('../src/recovery/sms-links'),hooks=require('../src/recovery/webhooks'),org=require('../src/recovery/organizations');
     const policy=require('../src/recovery/policy'),tenants=[];
     t.mock.method(global,'fetch',async()=>{throw Error('External network forbidden');});
@@ -65,6 +66,15 @@ test('tracked checkout links preserve targets and attribute only opened, subsequ
         await db.query('DELETE FROM recovery_actions WHERE id=$1',[f.actionId]);assert.equal(await count(f),1);
         await hooks.ingestShopify(f.shop,'orders/updated',{...order,financial_status:'refunded',current_subtotal_price:'0.00',updated_at:new Date(Date.now()+2000).toISOString()},randomUUID());
         assert.equal(await count(f),0);
+    });
+    await t.test('paused tracking keeps existing links working without recording new opens',async()=>{
+        const f=await fixture();delete process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED;
+        try {
+            assert.equal(await links.resolve(f.token),f.target);
+            assert.equal((await db.query('SELECT first_opened_at FROM recovery_sms_links WHERE action_id=$1',[f.actionId])).rows[0].first_opened_at,null);
+            assert.equal(await links.create(db,randomUUID(),f.callId),null);
+            assert.equal((await org.overview(f.customerId,Number(f.userId))).smsLinkTrackingEnabled,false);
+        } finally {process.env.RECOVERY_SMS_LINK_TRACKING_ENABLED='1';}
     });
     await t.test('unopened, unpaid, already paid, test and wrong-checkout orders do not count',async()=>{
         for(const kind of ['unopened','unpaid','already_paid','existing_order_later_update','expired_window','test_order','test_call','wrong_checkout']){
