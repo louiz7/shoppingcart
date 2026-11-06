@@ -43,3 +43,27 @@ Before adding an entry, verify Twilio ownership/capabilities, the correct region
 Live calls wait for the named agent's call-bound `recovery.amd_ready` attribute before creating the SIP participant. The agent runs LiveKit AMD with GPT-4.1-mini and Cartesia Ink Whisper through LiveKit Inference, using the configured German/English language. Audio remains muted during detection. Machine/IVR results invoke the authenticated `not_reached` endpoint, persist a terminal outcome, and delete only that call's room. Late mailbox greetings use `end_on_voicemail`. No greeting, SMS, follow-up ticket or contact suppression is created for a mailbox. Failed hangups are reconciled; voicemail/no-answer calls do not count toward attributed purchases. A human greeting or later reply cancels the 45-second unanswered-opening limit.
 
 `RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS` is an optional, server-only comma-separated UUID allowlist. Enable it only following explicit operator authorization that the merchant manages contact permissions. A live shop must also have its campaign start watermark, accepted terms and merchant approval. The allowlist permits future checkouts without per-contact opt-in records; it never writes fabricated opt-in timestamps or evidence. Each reserved call records `call_authorization.source=merchant_managed`. All other shops retain individual evidence requirements. Revocations, blocklists, purchase checks, time windows, attempt limits and the control group still apply. Removing the UUID restores the individual-evidence requirement. Activating global flags alone does not enable a shop.
+
+### Internal call-start email alerts
+
+Off by default. Reuses RescovaBR's Gmail API/OAuth flow for `louiz@rescova.de`.
+Configure `RECOVERY_CALL_ALERT_ENABLED=1`, `RECOVERY_CALL_ALERT_SHOP_ID`,
+`RECOVERY_CALL_ALERT_TO=louiz@rescova.de`, and an explicit UTC
+`RECOVERY_CALL_ALERT_START_AT` so old calls are not replayed. Copy the existing
+`GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` privately into the
+protected server environment. Also set a public HTTPS `RECOVERY_DASHBOARD_URL`.
+Never commit credentials. Gmail profile verification must match the owner mailbox
+before sending. The transport cannot send to customers or arbitrary recipients.
+
+The isolated API polls confirmed `dialed_at` receipts every five seconds in a
+separate loop, including labeled owner test calls. Simulated calls, unconfirmed
+reservations, other shops and calls older than 24 hours are excluded. Alerts contain
+only shop, start time, call ID and dashboard link, no customer details or transcripts.
+
+`recovery_call_alerts` has one durable claim per call. `accepted` means Gmail
+accepted the message, not proof of inbox delivery. OAuth/profile failures happen
+before claims and can be retried. `failed` and `unknown` sends require operator
+inspection; ambiguous sends are never automatically retried. Interrupted sends
+become `unknown` after two minutes. This prioritizes avoiding duplicate alerts over
+guaranteed delivery during provider failures. Disabling alerts stops new polls;
+a send already in progress can finish. Calls and customer SMS run independently.

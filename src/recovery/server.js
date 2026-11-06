@@ -48,6 +48,7 @@ if (require.main === module) {
     server.requestTimeout = 65000;
     server.listen(Number(process.env.PORT || 3610), '127.0.0.1', () => console.log('[ecom] API ready on loopback'));
     require('./worker').startRecoveryWorker();
+    require('./call-alerts').startCallAlertWorker();
     for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {
         server.close(async () => { await require('../db').pool.end(); process.exit(0); });
         setTimeout(() => process.exit(1), 10000).unref();
