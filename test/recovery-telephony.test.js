@@ -40,6 +40,7 @@ test('dedicated routing is selected only by the authenticated shop ID, including
     const {RoomServiceClient,AgentDispatchClient,SipClient}=require('livekit-server-sdk');
     t.mock.method(RoomServiceClient.prototype,'createRoom',async()=>({}));
     t.mock.method(AgentDispatchClient.prototype,'createDispatch',async()=>({}));
+    const readiness=t.mock.method(RoomServiceClient.prototype,'listParticipants',async()=>[{kind:4,attributes:{'recovery.amd_ready':'synthetic'}}]);
     const dial=t.mock.method(SipClient.prototype,'createSipParticipant',async()=>({}));
     await telephony.dial({shop_id:shop,room:'recovery-synthetic',id:'synthetic'},'+4900000000005','synthetic');
     await telephony.dial({shop_id:other,room:'recovery-other',id:'synthetic'},'+4900000000005','synthetic');
@@ -76,4 +77,18 @@ test('dedicated routing is selected only by the authenticated shop ID, including
         await assert.rejects(telephony.sendSms('+4900000000005','Synthetic',shop,shop),{code:'sms_not_configured',smsDispatched:false});
     }
     assert.equal(dial.mock.calls.length,3);assert.equal(request.mock.calls.length,4);
+    process.env.RECOVERY_SHOP_TELEPHONY='{}';
+    const cleanup=t.mock.method(RoomServiceClient.prototype,'deleteRoom',async()=>{});
+    let now=1000;
+    const clock=t.mock.method(Date,'now',()=>now);
+    for (const participants of [[],[{kind:0,attributes:{'recovery.amd_ready':'synthetic'}}],
+        [{kind:4,attributes:{'recovery.amd_ready':'other-call'}}]]) {
+        readiness.mock.mockImplementation(async()=>{now+=31000;return participants;});
+        await assert.rejects(telephony.dial({shop_id:shop,room:'recovery-synthetic',id:'synthetic'},'+4900000000005','synthetic'),
+            {code:'recovery_agent_not_ready'});
+        assert.equal(cleanup.mock.calls.at(-1).arguments[0],'recovery-synthetic');
+    }
+    clock.mock.restore();
+    assert.equal(dial.mock.calls.length,3);
+
 });

@@ -68,16 +68,26 @@ function inWindow(policy, timezone, now) {
     return policy.weekdays.includes(day) && time >= policy.start && time < policy.end;
 }
 
+// Explicit operator authorization only; this is not evidence of an individual opt-in.
+function merchantManagedContacts(shop) {
+    const ids = (process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS || '').split(',').filter(Boolean);
+    return shop.mode === 'live' && Number.isFinite(+new Date(shop.campaign_started_at || 'invalid')) &&
+        ids.every(id => /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) && ids.includes(shop.id);
+}
+
 function eligibility({ shop, checkout, contact, attempts = [], active = false }, now = new Date(), action = 'call', ownerTest = false) {
     const p = rules(shop.rules);
     if (!shop.enabled || !shop.approved_at) return 'merchant_not_approved';
     if (shop.mode === 'live' && shop.terms_current !== true) return 'terms_acceptance_required';
     if (checkout.completed_at || checkout.status === 'converted') return 'already_purchased';
     if (['stopped', 'expired'].includes(checkout.status) || contact?.stopped_at) return 'contact_stopped';
-    if (!contact?.consented_at || !contact.evidence || contact.revoked_at || !contact.expires_at ||
-        !Number.isFinite(+new Date(contact.expires_at)) || new Date(contact.expires_at) <= now) return 'consent_missing';
+    if (!contact || contact.revoked_at) return 'consent_missing';
+    if (!merchantManagedContacts(shop)) {
+        if (!contact.consented_at || !contact.evidence || !contact.expires_at ||
+            !Number.isFinite(+new Date(contact.expires_at)) || new Date(contact.expires_at) <= now) return 'consent_missing';
+        if (!contact.consent_checkout_id || contact.consent_checkout_id !== checkout.id) return 'consent_checkout_mismatch';
+    }
     if (!checkout.phone || checkout.phone !== contact.phone) return 'consent_phone_mismatch';
-    if (!contact.consent_checkout_id || contact.consent_checkout_id !== checkout.id) return 'consent_checkout_mismatch';
     if (!['EUR','USD'].includes(checkout.currency) || checkout.currency !== (shop.currency || 'EUR')) return 'unsupported_currency';
     if (ownerTest!==true && shop.campaign_started_at && new Date(checkout.source_updated_at)<new Date(shop.campaign_started_at)) return 'before_campaign_start';
     if (ownerTest!==true && new Date(checkout.source_updated_at) > new Date(now - p.delayMinutes * 60000)) return 'abandonment_delay';
@@ -133,4 +143,4 @@ function experimentReport(rows, costsCents = 0) {
 }
 
 module.exports = { DEFAULT_RULES, problem, rules, cents, phone, contactKey, assignment, inWindow,
-    eligibility, offer, checkoutUrl, cartHash, experimentReport };
+    merchantManagedContacts, eligibility, offer, checkoutUrl, cartHash, experimentReport };

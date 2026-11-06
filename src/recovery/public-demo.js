@@ -117,6 +117,10 @@ function link(shop,cart,code) {
 }
 async function tool(token,name,input={}) {
     if(name==='end') return end(token);
+    if(name==='not_reached') {
+        if(!['voicemail','no_answer'].includes(input.outcome)) throw policy.problem('invalid_unreached_outcome');
+        return {...await end(token),simulated:true};
+    }
     enabled();
     return transaction(async client=>{
         const row=await find(token,'token_hash',client,true),s=row.data;

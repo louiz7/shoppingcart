@@ -73,6 +73,20 @@ async function updateAgentProfile(customerId, shopId, input, userId) {
     });
 }
 
+async function pauseShop(customerId, shopId, userId) {
+    if (!/^[1-9][0-9]*$/.test(String(userId)) || !Number.isSafeInteger(Number(userId))) throw policy.problem('admin_required',403);
+    await transaction(async client => {
+        const actor=await client.query(`SELECT id FROM platform_users WHERE id=$1 AND customer_id=$2
+            AND role='admin' AND active FOR SHARE`,[userId,customerId]);
+        if (!actor.rowCount) throw policy.problem('admin_required',403);
+        const shop=await shopFor(customerId,shopId,client,true);
+        await client.query('UPDATE recovery_shops SET enabled=FALSE WHERE id=$1 AND customer_id=$2',[shop.id,customerId]);
+        if (shop.enabled) await event(client,shop.id,'campaign_paused',{userId:Number(userId)});
+    });
+    await require('./webhooks').reconcileStops(shopId);
+    return {paused:true};
+}
+
 async function consent(customerId, shopId, checkoutId, input) {
     const consentAt = new Date(input.consentedAt), expiresAt = new Date(input.expiresAt);
     if (input.verified !== true || typeof input.evidence !== 'string' || input.evidence.trim().length < 20 || input.evidence.length > 2000 ||
@@ -205,6 +219,9 @@ async function startCall(customerId, shopId, checkoutId, options = {}) {
         await client.query(`INSERT INTO recovery_calls(id,shop_id,checkout_id,contact_key,room,token_hash,expires_at,status,is_test)
             VALUES($1,$2,$3,$4,$5,$6,NOW()+INTERVAL '15 minutes',$7,$8)`,
         [id, shop.id, checkoutId, ctx.checkout.contact_key, room, hash(token), shop.mode === 'simulation' ? 'simulated' : 'reserved',ownerTest]);
+        if (shop.mode === 'live') await event(client, shop.id, 'call_authorization', {
+            source: policy.merchantManagedContacts(shop) ? 'merchant_managed' : 'individual_evidence', checkoutId,
+        }, id);
         if (shop.mode === 'simulation') {
             await event(client, shop.id, 'simulation_call', { checkoutId, noExternalAction: true }, id);
             return { simulated: true, id };
@@ -275,7 +292,8 @@ async function callContext(token, cleanup = false) {
     if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw policy.problem('invalid_call_token', 401);
     const { rows } = await db.query(`SELECT a.*,s.customer_id FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
         JOIN customers c ON c.id=s.customer_id WHERE a.token_hash=$1 AND
-        ((a.expires_at>NOW() AND a.status IN ('reserved','dialing','connected') AND c.is_active)
+        ((a.expires_at>NOW() AND a.status IN ('reserved','dialing','connected') AND c.is_active
+            AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer')
         OR ($2::boolean AND s.mode='live' AND a.status!='simulated'))`, [hash(token), cleanup]);
     if (!rows[0]) throw policy.problem('invalid_call_token', 401);
     return rows[0];
@@ -301,6 +319,23 @@ async function endCall(call) {
         await event(client,actual.shop_id,'call_cleanup_confirmed',{ source: 'livekit_delete_room' },actual.id);
     });
     return { ended: true };
+}
+
+async function endUnreached(call, outcome) {
+    if (!['voicemail','no_answer'].includes(outcome)) throw policy.problem('invalid_unreached_outcome');
+    await transaction(async client => {
+        await client.query('SELECT id FROM recovery_shops WHERE id=$1 AND customer_id=$2 FOR UPDATE',[call.shop_id,call.customer_id]);
+        const { rows:[actual] }=await client.query(`SELECT a.* FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
+            WHERE a.id=$1 AND a.shop_id=$2 AND a.checkout_id=$3 AND s.customer_id=$4
+            AND s.mode='live' AND a.status!='simulated' FOR UPDATE OF a`,[call.id,call.shop_id,call.checkout_id,call.customer_id]);
+        if (!actual || actual.room!==`recovery-${actual.id}`) throw policy.problem('invalid_call_token',401);
+        if ((actual.ended_at && actual.outcome) || ['voicemail','no_answer'].includes(actual.outcome)) return;
+        // Persist the terminal intent before the provider request; never pretend a failed hangup succeeded.
+        await client.query(`UPDATE recovery_calls SET outcome=$2,summary=$3,status=CASE WHEN ended_at IS NULL THEN 'unknown' ELSE status END WHERE id=$1`,
+        [actual.id,outcome,outcome==='voicemail' ? 'Mailbox erkannt; keine Nachricht hinterlassen.' : 'Kein persönliches Gespräch zustande gekommen; Anruf beendet.']);
+        await event(client,actual.shop_id,'unreached_hangup_requested',{outcome},actual.id);
+    });
+    return endCall(call);
 }
 
 async function getContext(call) {
@@ -340,7 +375,7 @@ async function dailySummary(customerId, asOf = new Date(), shopId = null) {
     if (!(asOf instanceof Date) || !Number.isFinite(+asOf)) throw policy.problem('invalid_summary_time');
     if (shopId!==null && !uuid(shopId)) throw policy.problem('shop_not_found',404);
     const { rows } = await db.query(`WITH shops AS (
-        SELECT s.id,s.brand,s.domain,s.currency,COALESCE(s.rules->>'timezone','Europe/Berlin') AS timezone
+        SELECT s.id,s.brand,s.domain,s.currency,s.enabled,COALESCE(s.rules->>'timezone','Europe/Berlin') AS timezone
         FROM recovery_shops s JOIN customers c ON c.id=s.customer_id
         WHERE s.customer_id=$1 AND c.is_active AND s.mode='live' AND ($3::uuid IS NULL OR s.id=$3)
     ), days AS (
@@ -348,13 +383,13 @@ async function dailySummary(customerId, asOf = new Date(), shopId = null) {
             date_trunc('day',$2::timestamptz AT TIME ZONE timezone) AT TIME ZONE timezone AS starts_at,
             (date_trunc('day',$2::timestamptz AT TIME ZONE timezone)+INTERVAL '1 day') AT TIME ZONE timezone AS ends_at
         FROM shops
-    ) SELECT d.id,d.brand,d.domain,d.timezone AS "timeZone",d.date,
+    ) SELECT d.id,d.brand,d.domain,d.enabled,d.timezone AS "timeZone",d.date,
         (SELECT count(*)::int FROM recovery_calls a WHERE a.shop_id=d.id AND a.status!='simulated'
             AND a.dialed_at>=d.starts_at AND a.dialed_at<d.ends_at) AS "callsToday",
         (SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=d.id AND o.paid AND NOT o.is_test AND o.currency=d.currency
             AND o.paid_at>=d.starts_at AND o.paid_at<d.ends_at AND EXISTS (
                 SELECT 1 FROM recovery_checkouts checkout JOIN recovery_calls a ON a.checkout_id=checkout.id AND a.shop_id=checkout.shop_id
-                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL
+                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer'
                     AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                     AND (o.recovery_checkout_id=checkout.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id)
             )) AS "confirmedCheckoutsToday"
@@ -591,6 +626,7 @@ async function confirmContact(call, userEventId) {
 async function outcome(call, input) {
     if (!['interested', 'undecided', 'refused', 'wrong_person', 'voicemail', 'purchased_claimed', 'human_needed', 'no_answer'].includes(input.outcome) ||
         typeof input.summary !== 'string' || input.summary.length > 1000) throw policy.problem('invalid_outcome');
+    if (input.outcome==='voicemail') return endUnreached(call,'voicemail');
     if (['refused', 'wrong_person'].includes(input.outcome)) await stopContact(call.customer_id, call.shop_id, call.checkout_id, input.outcome, call.id);
     await db.query(`UPDATE recovery_calls SET outcome=$2,summary=$3 WHERE id=$1`, [call.id, input.outcome, input.summary]);
     return { recorded: true, purchaseConfirmed: false };
@@ -643,5 +679,5 @@ async function dashboard(customerId) {
     };
 }
 
-module.exports = { conversationEvidence, uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
-    stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, sendHelpArticle, recordTranscript, confirmContact, outcome, dashboard };
+module.exports = { conversationEvidence, uuid, hash, shopFor, state, saveSettings, pauseShop, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
+    stopContact, callContext, endCall, endUnreached, getContext, recordConnection, dailySummary, getOffer, sendLink, sendHelpArticle, recordTranscript, confirmContact, outcome, dashboard };

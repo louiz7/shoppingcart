@@ -198,7 +198,8 @@ async function reconcileStops(shopId = null) {
         JOIN recovery_contacts p ON p.shop_id=a.shop_id AND p.contact_key=a.contact_key
         JOIN recovery_checkouts c ON c.id=a.checkout_id
         WHERE ($1::uuid IS NULL OR a.shop_id=$1) AND a.status IN ('reserved','dialing','connected','unknown')
-        AND (NOT tenant.is_active OR NOT s.enabled OR p.stopped_at IS NOT NULL OR c.completed_at IS NOT NULL OR a.expires_at<NOW()) LIMIT 50`, [shopId]);
+        AND (NOT tenant.is_active OR NOT s.enabled OR p.stopped_at IS NOT NULL OR c.completed_at IS NOT NULL OR a.expires_at<NOW()
+            OR a.outcome IN ('voicemail','no_answer')) LIMIT 50`, [shopId]);
     await Promise.all(rows.map(async (row) => {
         try { await telephony.hangup(row.room); }
         catch { /* Retain the durable stop and retry cleanup on the next worker tick. */ }

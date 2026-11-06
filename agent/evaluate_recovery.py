@@ -16,6 +16,16 @@ from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('mailbox_de', False, [('user','Sie sind mit der Mobilbox verbunden. Bitte hinterlassen Sie Ihre Nachricht nach dem Signalton.')], 'end_on_voicemail', None),
+    ('mailbox_en', False, [('user',"You've reached Sam. I can't get to the phone right now. Leave your name and number after the tone.")], 'end_on_voicemail', None),
+    ('mailbox_full', False, [('user','Die Mailbox dieses Teilnehmers ist voll. Es können keine weiteren Nachrichten aufgenommen werden.')], 'end_on_voicemail', None),
+    ('mailbox_not_configured', False, [('user','The person you called has a voice mailbox that has not been set up yet.')], 'end_on_voicemail', None),
+    ('mailbox_delayed_greeting', False, [('user','Hallo?'),('assistant','Hallo, hier ist Lea.'),('user','Hier ist die Mailbox von Alex. Ich bin gerade nicht erreichbar. Sprich bitte nach dem Ton.')], 'end_on_voicemail', None),
+    ('mailbox_human_mentions_it', False, [('user','Deine letzte Nachricht war auf meiner Mailbox, aber jetzt bin ich selbst dran. Was kostet das Shirt?')], 'no_tools', None),
+    ('mailbox_human_repeats_prompt', False, [('user','Mein Handy sagt manchmal: Bitte hinterlassen Sie eine Nachricht. Das ist nervig. Aber ich spreche gerade selbst mit dir. Was kostet das Shirt?')], 'no_tools', None),
+    ('mailbox_human_takes_over', False, [('user','Bitte sprechen Sie nach dem Signalton.'),('user','Moment, ich habe gerade abgenommen! Ich bin jetzt selbst dran. Was kostet das Shirt?')], 'no_tools', None),
+    ('mailbox_short_hello', False, [('user','Hallo?')], 'no_tools', None),
+
     ('ticket_human_de', False, [('user','Ich möchte, dass ein echter Mitarbeiter prüft, ob dieses Shirt individuell bestickt werden kann. Bitte gib diese Frage intern weiter.')], 'create_followup_ticket', None),
     ('ticket_human_en', False, [('user','Please pass this question to a human colleague: can this shirt be individually embroidered? I am not asking for a phone call.')], 'create_followup_ticket', None),
     ('ticket_callback', False, [('user','Bitte lass mich von einem echten Mitarbeiter telefonisch zurückrufen, um zu klären, ob das Shirt individuell bestickt werden kann.')], 'create_followup_ticket', None),
@@ -125,9 +135,9 @@ async def main():
             ('browser_discount',True,[('assistant','Mit zehn Prozent Rabatt kostet es 90 Euro. Soll ich dir den Link damit hier anzeigen?'),('user','Genau so machen wir das.')],'send_checkout_link',True),
             ('browser_no_discount',True,[('assistant','Möchtest du den Zehn-Prozent-Rabatt?'),('user','Nein danke, zeig mir einfach den normalen Link hier.')],'send_checkout_link',False),
             ('browser_stop',False,[('user','Ich möchte nicht weiter sprechen, bitte keine Nachrichten mehr.')],'stop_contact',None),
-        ] + [case for case in CASES if case[0].startswith(('scope_', 'zendesk_send_', 'purchase_', 'ticket_'))]
+        ] + [case for case in CASES if case[0].startswith(('scope_', 'zendesk_send_', 'purchase_', 'ticket_', 'mailbox_'))]
     if args.service_mode:
-        cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_', 'purchase_', 'ticket_')) or case[0] in
+        cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_', 'purchase_', 'ticket_', 'mailbox_')) or case[0] in
             ('ready_buyer','discount_and_sms','decline_discount','retract_discount','contact_stop','future_contact_stop','wrong_person','price_no_offer')]
         cases += [
             ('startup_item',False,[('user','Was genau habe ich im Warenkorb?')],'no_tools',None),
@@ -142,6 +152,11 @@ async def main():
             ('service_ready_after_answer',False,[('assistant','Das Shirt besteht aus 100 Prozent Baumwolle.'),('user','Super, dann passt das. Schick mir den Checkout per SMS.')],'send_checkout_link',False),
             ('service_callback_requested',False,[('user','Kannst du verbindlich einen Mitarbeiter-Rückruf für morgen buchen?')],'create_followup_ticket',None),
         ]
+    if os.environ.get('RECOVERY_EVAL_CASE_PREFIXES'):
+        prefixes=tuple(os.environ['RECOVERY_EVAL_CASE_PREFIXES'].split(','))
+        cases=[case for case in cases if case[0].startswith(prefixes)]
+        if not cases:
+            raise ValueError('No evaluation cases matched')
     timings = []
     agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None, demo=args.browser_demo)
     schemas = []
@@ -268,7 +283,7 @@ async def main():
             if passed and name == 'product_identity_correction':
                 passed = 'The Collection Snowboard: Liquid' in result.output_text
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_', 'service_', 'purchase_', 'ticket_')) else {})}),flush=True)
+                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_', 'service_', 'purchase_', 'ticket_', 'mailbox_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),

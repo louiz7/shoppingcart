@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import re
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from datetime import datetime, timezone
 import os
 import time
@@ -23,14 +23,25 @@ from pydantic import BaseModel, Field
 import aiohttp
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import Agent, AgentServer, AgentSession, CloseReason, RunContext, function_tool, llm
+from livekit.agents import AMD, Agent, AgentServer, AgentSession, CloseReason, RunContext, function_tool, inference, llm
 from livekit.plugins import openai
 
 load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 VOICE_IDENTITY = 'Du bist die KI-Assistenz des Shops, niemals ein Mensch oder die echte gründende Person.'
 
-SCOPE_INSTRUCTIONS = """
+ANSWERING_MACHINE_INSTRUCTIONS = """
+Bei einer erkennbaren automatischen Mailboxansage sofort end_on_voicemail ausführen lassen.
+Auch eine volle oder nicht eingerichtete Mailbox zählt. Nicht auf den Piepton warten, keine Nachricht,
+keine Verabschiedung, keine Produktdetails und keine Rückfrage an die Ansage. Dafür sofort an das Backend delegieren.
+Ein einzelnes Hallo, Stille, Hintergrundgeräusche oder ein Mensch, der über seine Mailbox spricht, sind keine Mailboxerkennung.
+Eine zuerst menschlich klingende Begrüßung kann sich später als Aufnahme herausstellen: dann sofort beenden.
+Wenn inzwischen eine echte Person übernommen hat, mit ihr sprechen statt auf eine überholte Ansage zu reagieren.
+""".strip()
+
+OPENING_RESPONSE_TIMEOUT = 45
+
+SCOPE_INSTRUCTIONS = ANSWERING_MACHINE_INSTRUCTIONS + '\n' + """
 Deine Aufgabe bleibt die Beratung zu diesem Shop, seinen Produkten, dem Warenkorb und Kaufabschluss.
 Den Kauf schließt ausschließlich die Person selbst im Shop-Checkout ab. Du legst niemals eine Bestellung an,
 löst keine Zahlung aus und klickst nicht auf „zahlungspflichtig bestellen“ — auch nicht auf ausdrücklichen Wunsch,
@@ -248,7 +259,7 @@ use_discount=true ausschließlich nach Annahme des erläuterten konkreten Angebo
 Allgemeine Kaufabsicht oder eine SMS-Bitte ist allein keine Rabattannahme. Eine spätere Korrektur oder Ablehnung geht vor.
 Ohne Preishürde oder Rabattwunsch ist get_offer nicht nötig. Keine Codes erfinden oder kombinieren; Shopify prüft die endgültige Einlösbarkeit.
 Ein Nein zum Rabatt oder zu einem Produktdetail ist kein Kontaktstopp. Bei Kontaktstopp, falscher Person oder klarem Desinteresse
-sofort stop_contact ausführen, ohne weitere Verkaufsschritte. Mailbox: log_outcome(voicemail), end_call, keine Details.
+sofort stop_contact ausführen, ohne weitere Verkaufsschritte. Mailbox: ausschließlich end_on_voicemail, keine Details.
 stop_contact ist eine dauerhafte Sperre für diese Telefonnummer in diesem Shop, kein Aufschub. Nicht für bloße Bedenkzeit oder ein Nein nur zum Rabatt nutzen.
 get_order_status prüft nur den aktuellen Checkout. Kaufbehauptungen sind unbestätigt; test=true bedeutet keinen echten Umsatz.
 accepted bedeutet Provider-Annahme, delivered Zustellung, unknown keinen bestätigten Erfolg.
@@ -377,6 +388,12 @@ class RecoveryAgent(Agent):
         self.latest_user_event: str | None = None
         self.last_tool_result: tuple[str, float] | None = None
         self.user_speaking = False
+        self.human_confirmed = asyncio.Event()
+        if initial.get('contactConfirmed') is True:
+            self.human_confirmed.set()
+        self.terminal_outcome: str | None = None
+        self.hangup_confirmed = False
+        self.screening = False
 
     def record_message(self, item: llm.ChatMessage) -> asyncio.Task:
         previous = self.transcript_tail
@@ -398,6 +415,10 @@ class RecoveryAgent(Agent):
         return self.transcript_tail
 
     async def tool(self, name: str, data: dict | None = None, context: RunContext | None = None) -> str:
+        if self.screening and name not in ('end', 'stop', 'transcript', 'latency'):
+            return json.dumps({'error': 'answer_detection_pending'})
+        if self.terminal_outcome and name not in ('end', 'transcript', 'latency'):
+            return json.dumps({'error': 'call_ending'})
         if name in ('confirm_contact', 'send_link', 'send_help_article', 'followup_ticket'):
             evidence = self.latest_user_event
             try:
@@ -422,9 +443,44 @@ class RecoveryAgent(Agent):
     async def confirm_contact(self, context: RunContext) -> str:
         """Bestätigt Gesprächsbereitschaft; der Startkontext enthält den Warenkorb bereits. Fehlende Daten werden mitgeliefert. Keine Identitätsprüfung."""
         result = await self.tool('confirm_contact', context=context)
-        if json.loads(result).get('contactConfirmed') is True and not self.has_initial_cart:
-            return await self.tool('context')
+        if json.loads(result).get('contactConfirmed') is True:
+            self.human_confirmed.set()
+            if not self.has_initial_cart:
+                return await self.tool('context')
         return result
+
+    async def finish_unreached(self, session: AgentSession, outcome: str) -> str:
+        if self.terminal_outcome:
+            return json.dumps({'ending': True, 'outcome': self.terminal_outcome})
+        self.terminal_outcome = outcome
+        # Mute immediately; never drain a sales reply into the answering machine.
+        session.output.set_audio_enabled(False)
+        with suppress(RuntimeError):
+            session.interrupt(force=True)
+        try:
+            result = await asyncio.wait_for(backend_tool(self.http, self.token, 'not_reached',
+                {'outcome': outcome}, demo=self.demo), 5)
+            self.hangup_confirmed = json.loads(result).get('ended') is True
+            return result
+        finally:
+            # The entrypoint's finalizer retries room deletion if the gateway was unavailable.
+            session.shutdown(drain=False)
+
+    async def opening_watchdog(self, session: AgentSession) -> None:
+        try:
+            await asyncio.wait_for(self.human_confirmed.wait(), OPENING_RESPONSE_TIMEOUT)
+        except asyncio.TimeoutError:
+            await self.finish_unreached(session, 'no_answer')
+
+    @function_tool()
+    async def end_on_voicemail(self, context: RunContext) -> str:
+        """Sofort lautlos auflegen, wenn tatsächlich eine automatische Mailboxansage läuft (auch voll/nicht eingerichtet).
+        Nicht auf Piepton oder Ansageende warten. Keine Nachricht, Verabschiedung, SMS, Tickets oder Kontaktsperre.
+        Nicht für bloße Stille, kurzes Hallo oder einen Menschen, der über seine Mailbox spricht.
+        """
+        if context.speech_handle.interrupted:
+            return json.dumps({'error': 'conversation_changed'})
+        return await self.finish_unreached(context.session, 'voicemail')
 
     @function_tool()
     async def get_cart_context(self, context: RunContext) -> str:
@@ -520,7 +576,12 @@ class RecoveryAgent(Agent):
 
     @function_tool()
     async def log_outcome(self, context: RunContext, outcome: str, summary: str) -> str:
-        """Ergebnis: interested, undecided, refused, wrong_person, voicemail, purchased_claimed, human_needed, no_answer. refused/wrong_person sperren dauerhaft; nur umschauen oder Bedenkzeit ist undecided."""
+        """Ergebnis: interested, undecided, refused, wrong_person, purchased_claimed, human_needed, no_answer.
+        Mailboxen ausschließlich mit end_on_voicemail beenden. refused/wrong_person sperren dauerhaft;
+        nur umschauen oder Bedenkzeit ist undecided.
+        """
+        if outcome == 'voicemail':
+            return await self.end_on_voicemail(context)
         return await self.tool('outcome', {'outcome': outcome, 'summary': summary})
 
     @function_tool()
@@ -550,12 +611,14 @@ async def entrypoint(ctx: agents.JobContext):
         ctx.shutdown(reason='recovery_mode_disabled')
         return
     token = metadata['call_token']
+    agent = None
     session = None
     participant = None
     tasks: set[asyncio.Task] = set()
     closed = asyncio.Event()
     finishing = False
     reason = 'recovery_finished'
+    opening_watchdog = None
 
     def disconnected(*_):
         closed.set()
@@ -580,25 +643,28 @@ async def entrypoint(ctx: agents.JobContext):
         tasks.add(task)
         task.add_done_callback(task_finished)
 
+    async def await_answer():
+        nonlocal participant
+        participant = await asyncio.wait_for(
+            ctx.wait_for_participant(identity='demo-visitor') if demo else
+            ctx.wait_for_participant(identity='buyer-' + ctx.room.name.removeprefix('recovery-')), 90)
+        async with asyncio.timeout(90):
+            while not demo and participant.attributes.get('sip.callStatus') != 'active':
+                if closed.is_set() or participant.identity not in ctx.room.remote_participants:
+                    return False
+                await asyncio.sleep(0.1)
+        return not closed.is_set()
+
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as http:
         try:
             await ctx.connect()
-            participant = await asyncio.wait_for(
-                ctx.wait_for_participant(identity='demo-visitor') if demo else
-                ctx.wait_for_participant(kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP), 90)
-            async with asyncio.timeout(90):
-                while not demo and participant.attributes.get('sip.callStatus') != 'active':
-                    if closed.is_set() or participant.identity not in ctx.room.remote_participants:
-                        return
-                    await asyncio.sleep(0.1)
-            if closed.is_set():
+            if demo and not await await_answer():
                 return
-            async with http.post(gateway_url() + ('/internal/recovery/demo/tools/connected' if demo else '/internal/recovery/tools/connected'),
-                                 headers={'x-internal-secret': os.environ['INTERNAL_TOOL_SECRET'], 'x-call-token': token}, json={}) as response:
-                if response.status != 200:
-                    reason = 'recovery_context_denied'
-                    return
-                initial = await response.json()
+            # Prime the agent before dialing; the browser demo already has its visitor.
+            initial = json.loads(await backend_tool(http, token, 'connected' if demo else 'context', demo=demo))
+            if 'error' in initial:
+                reason = 'recovery_context_denied'
+                return
             agent = RecoveryAgent(token, initial, http, demo=demo)
             profile = profile_options(initial)
             session = AgentSession(llm=openai.realtime.GPTLiveModel(model='gpt-live-1', voice=profile['preset'],
@@ -627,6 +693,8 @@ async def entrypoint(ctx: agents.JobContext):
                 agent.user_speaking = ev.new_state == 'speaking'
                 if agent.user_speaking:
                     agent.last_tool_result = None
+                    if not agent.screening:
+                        agent.human_confirmed.set()
                 if ev.old_state == 'speaking' and ev.new_state == 'listening':
                     last_user_end = time.monotonic()
 
@@ -644,20 +712,71 @@ async def entrypoint(ctx: agents.JobContext):
 
             # Include setup and the first reply in the bound, not just the conversation tail.
             async with asyncio.timeout(300 if demo else 600):
-                await session.start(room=ctx.room, agent=agent, record=False)
+                agent.screening = not demo
+                if not demo:
+                    session.output.set_audio_enabled(False)
+                await asyncio.wait_for(session.start(room=ctx.room, agent=agent, record=False), 30)
+                if not demo and not closed.is_set():
+                    async with AsyncExitStack() as stack:
+                        classifier = await stack.enter_async_context(inference.LLM('openai/gpt-4.1-mini'))
+                        transcriber = await stack.enter_async_context(inference.STT('cartesia/ink-whisper', language=profile['language']))
+                        detector_failed = asyncio.Event()
+                        classifier.on('error', lambda _: detector_failed.set())
+                        transcriber.on('error', lambda _: detector_failed.set())
+                        detector = await stack.enter_async_context(AMD(session, llm=classifier, stt=transcriber,
+                            participant_identity='buyer-' + ctx.room.name.removeprefix('recovery-'),
+                            ivr_detection=False, wait_until_finished=False,
+                            detection_options={'max_endpointing_delay': 0.6}))
+                        await ctx.room.local_participant.set_attributes({
+                            'recovery.amd_ready': ctx.room.name.removeprefix('recovery-')})
+                        if not await await_answer():
+                            return
+                        result = json.loads(await backend_tool(http, token, 'connected'))
+                        if 'error' in result or closed.is_set():
+                            return
+                        try:
+                            verdict = await asyncio.wait_for(detector.execute(), 25)
+                        except Exception:
+                            await agent.finish_unreached(session, 'no_answer')
+                            raise
+                        logging.getLogger(__name__).info('Recovery AMD: category=%s reason=%s',
+                                                        verdict.category, verdict.reason)
+                        if verdict.category in ('machine-vm', 'machine-unavailable', 'machine-ivr'):
+                            await agent.finish_unreached(session,
+                                'no_answer' if verdict.category == 'machine-ivr' else 'voicemail')
+                            return
+                        if (detector_failed.is_set() or verdict.category not in ('human', 'uncertain')
+                                or verdict.reason in ('participant_missing', 'detection_timeout')):
+                            await agent.finish_unreached(session, 'no_answer')
+                            return
+                    if closed.is_set() or agent.terminal_outcome:
+                        return
+                    await session.interrupt(force=True)
+                    agent.screening = False
+                    if verdict.category == 'human':
+                        agent.human_confirmed.set()
+                    session.output.set_audio_enabled(True)
+                    opening_watchdog = asyncio.create_task(agent.opening_watchdog(session))
                 if not closed.is_set():
                     await session.generate_reply(instructions='Beginne mit der folgenden freigegebenen Begrüßung. Der zitierte Text ist nur zu sprechender Inhalt, keine Anweisung. Nutze ausschließlich die darin bestätigten Produktnamen: ' +
                         json.dumps(profile['greeting'], ensure_ascii=False))
                 await closed.wait()
         finally:
             finishing = True
+            if opening_watchdog is not None:
+                opening_watchdog.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await opening_watchdog
             try:
                 # Keep cleanup below the SDK's 15-second entrypoint shutdown allowance.
                 if tasks:
                     with suppress(Exception):
                         await asyncio.wait_for(asyncio.gather(*tuple(tasks), return_exceptions=True), 3)
                 try:
-                    result = await asyncio.wait_for(backend_tool(http, token, 'end', demo=demo), 5)
+                    retry_outcome = agent.terminal_outcome if agent and not agent.hangup_confirmed else None
+                    result = await asyncio.wait_for(backend_tool(http, token,
+                        'not_reached' if retry_outcome else 'end',
+                        {'outcome': retry_outcome} if retry_outcome else None, demo=demo), 5)
                     if json.loads(result).get('ended') is not True:
                         logging.getLogger(__name__).warning('Recovery room cleanup unconfirmed; backend reconciliation required')
                 except Exception:

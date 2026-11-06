@@ -168,3 +168,34 @@ test('incremental contribution subtracts baseline and costs, requires both group
     assert.equal(report.incrementalContributionCents, 1800);
     assert.equal(p.experimentReport([]).incrementalContributionCents, null);
 });
+
+
+test('merchant-managed activation is explicit, tenant scoped and preserves suppression and timing', t => {
+    const prior=process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS;
+    t.after(()=>{if(prior===undefined) delete process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS; else process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS=prior;});
+    const id='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS=id;
+    const active=()=>{
+        const c=context();Object.assign(c.shop,{id,mode:'live',terms_current:true,campaign_started_at:'2026-11-02T08:00:00Z'});
+        for(const key of ['consented_at','evidence','expires_at','consent_checkout_id']) delete c.contact[key];
+        return c;
+    };
+    assert.equal(p.eligibility(active(),NOW),null);
+    for(const [expected,change] of [
+        ['consent_missing',c=>{c.shop.id='bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';}],
+        ['consent_missing',c=>{c.shop.campaign_started_at=null;}],
+        ['consent_missing',c=>{c.contact.revoked_at=NOW;}],
+        ['consent_phone_mismatch',c=>{c.contact.phone='+49111111111';}],
+        ['contact_stopped',c=>{c.contact.stopped_at=NOW;}],
+        ['already_purchased',c=>{c.checkout.completed_at=NOW;}],
+        ['terms_acceptance_required',c=>{c.shop.terms_current=false;}],
+        ['before_campaign_start',c=>{c.checkout.source_updated_at='2026-11-02T07:00:00Z';}],
+        ['abandonment_delay',c=>{c.checkout.source_updated_at=NOW;}],
+        ['control_group',c=>{c.contact.arm='control';}],
+        ['attempt_limit',c=>{c.attempts=[{created_at:NOW},{created_at:NOW}];}],
+    ]) {const c=active();change(c);assert.equal(p.eligibility(c,NOW),expected);}
+    for(const value of ['',id+',invalid','*']){
+        process.env.RECOVERY_MERCHANT_MANAGED_CONTACT_SHOPS=value;
+        assert.equal(p.eligibility(active(),NOW),'consent_missing');
+    }
+});

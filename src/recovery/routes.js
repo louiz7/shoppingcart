@@ -91,6 +91,7 @@ function merchantRouter() {
     const router = express.Router();
     router.get('/', handle(async (req, res) => res.json(await service.dashboard(req.customer.id))));
     router.get('/summary', handle(async (req, res) => res.json(await service.dailySummary(req.customer.id))));
+    router.post('/shops/:shopId/pause', handle(async (req,res)=>res.json(await service.pauseShop(req.customer.id,req.params.shopId,req.get('x-user-id')))));
     router.get('/settings', handle(async (req, res) => res.json(await require('./discounts').settings(req.customer.id))));
     router.get('/tickets', handle(async (req,res)=>res.json(await require('./followup-tickets').list(req.customer.id,Number(req.get('x-user-id'))))));
     router.post('/tickets/:ticketId/resolve', handle(async (req,res)=>res.json(await require('./followup-tickets').resolve(req.customer.id,Number(req.get('x-user-id')),req.params.ticketId))));
@@ -127,12 +128,13 @@ toolsRouter.use((req, res, next) => req.method === 'POST' ? next() : res.sendSta
 toolsRouter.use(internal, handle(async (req, res) => {
     const name = req.path.slice(1);
     // Expiry/deactivation must block new actions while still allowing this room to be closed.
-    const call = await service.callContext(req.get('x-call-token'), name === 'end');
+    const call = await service.callContext(req.get('x-call-token'), ['end','not_reached'].includes(name));
     const started = performance.now();
     let result;
     switch (name) {
     case 'context': result = await service.getContext(call); break;
     case 'connected': result = await service.recordConnection(call); break;
+    case 'not_reached': result = await service.endUnreached(call,req.body.outcome); break;
     case 'confirm_contact': result = await service.confirmContact(call, req.body.userEventId); break;
     case 'search_products': result = await require('./catalog').searchProducts(call,req.body.query,req.body.maxPriceCents); break;
     case 'product_details': result = await require('./catalog').productDetails(call,req.body.variantId); break;

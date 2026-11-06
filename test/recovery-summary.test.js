@@ -96,6 +96,17 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         await assert.rejects(hooks.ingestShopify(s, 'orders/paid', { ...payload, id: 'invalid-test-order', test: 'true' }, randomUUID()), /invalid_order/);
     });
 
+    await t.test('answered mailboxes do not turn later purchases into recovered orders', async () => {
+        const s=await shop(await tenant()),c=await checkout(s);
+        const a=await call(s,c,'2026-11-02T08:00:00Z','2026-11-02T08:01:00Z');
+        await order(s,c,'2026-11-02T09:00:00Z');
+        assert.equal((await service.dailySummary(s.customer_id,asOf)).shops[0].confirmedCheckoutsToday,1);
+        await service.endUnreached(a,'voicemail');
+        const summary=(await service.dailySummary(s.customer_id,asOf)).shops[0];
+        assert.equal(summary.confirmedCheckoutsToday,0);assert.equal(summary.callsToday,1);
+        assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[a.id])).rows[0].outcome,'voicemail');
+    });
+
     await t.test('tenant, simulation, original checkout and actual payment evidence are required', async () => {
         const owner = await tenant(), outsider = await tenant();
         const s = await shop(owner), foreign = await shop(outsider), simulation = await shop(owner, 'Europe/Berlin', 'simulation');
@@ -125,7 +136,7 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         await db.query('UPDATE recovery_shops SET enabled=FALSE WHERE id=$1', [s.id]);
         const summary = await service.dailySummary(owner, asOf);
         assert.deepEqual(summary, { asOf: asOf.toISOString(), shops: [{ id: s.id, brand: s.brand, domain: s.domain,
-            timeZone: 'Europe/Berlin', date: '2026-11-02', callsToday: 3, confirmedCheckoutsToday: 1 }] });
+            enabled: false, timeZone: 'Europe/Berlin', date: '2026-11-02', callsToday: 3, confirmedCheckoutsToday: 1 }] });
         assert.equal((await service.dailySummary(outsider, asOf)).shops[0].confirmedCheckoutsToday, 1);
         assert.deepEqual((await service.dailySummary(owner,asOf,s.id)).shops,summary.shops);
         assert.deepEqual((await service.dailySummary(owner,asOf,foreign.id)).shops,[]);
@@ -166,7 +177,7 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
             await call(s, c, end);
             await order(s, c, new Date(Date.parse(end)-1).toISOString());
             assert.deepEqual((await service.dailySummary(s.customer_id, new Date(instant))).shops[0], {
-                id: s.id, brand: s.brand, domain: s.domain, timeZone: 'Europe/Berlin', date, callsToday: 2, confirmedCheckoutsToday: 1,
+                id: s.id, brand: s.brand, domain: s.domain, enabled: true, timeZone: 'Europe/Berlin', date, callsToday: 2, confirmedCheckoutsToday: 1,
             });
         }
         const s = await shop(await tenant(), 'America/Los_Angeles'), c = await checkout(s);
@@ -216,7 +227,7 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
             assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
             const body = await response.json();
             assert.deepEqual(Object.keys(body).sort(), ['asOf', 'shops']);
-            assert.deepEqual(Object.keys(body.shops[0]).sort(), ['brand','callsToday','confirmedCheckoutsToday','date','domain','id','timeZone']);
+            assert.deepEqual(Object.keys(body.shops[0]).sort(), ['brand','callsToday','confirmedCheckoutsToday','date','domain','enabled','id','timeZone']);
         } finally { await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
     });
 });

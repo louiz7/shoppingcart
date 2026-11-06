@@ -1,6 +1,8 @@
 'use strict';
 
 const { SipClient, RoomServiceClient, AgentDispatchClient } = require('livekit-server-sdk');
+const { ParticipantInfo_Kind } = require('@livekit/protocol');
+const { setTimeout: delay } = require('node:timers/promises');
 const { problem, phone } = require('./policy');
 
 // Only deployment configuration can assign numbers; callers supply the authenticated shop ID.
@@ -49,6 +51,15 @@ async function dial(call, number, token) {
         metadata: JSON.stringify({ mode: 'recovery', call_token: token }) });
     try {
         await dispatch.createDispatch(call.room, process.env.LIVEKIT_AGENT_NAME);
+        // The detector must be listening before the SIP leg can deliver its first audio.
+        const deadline = Date.now() + 30000;
+        while (true) {
+            const participants = await rooms.listParticipants(call.room);
+            if (participants.some(p => p.kind === ParticipantInfo_Kind.AGENT &&
+                p.attributes?.['recovery.amd_ready'] === call.id)) break;
+            if (Date.now() >= deadline) throw problem('recovery_agent_not_ready', 503);
+            await delay(200);
+        }
         return await sip.createSipParticipant(route.trunkId, number, call.room, {
             participantIdentity: `buyer-${call.id}`, participantName: 'Shop customer',
             fromNumber: route.callerId, waitUntilAnswered: false,

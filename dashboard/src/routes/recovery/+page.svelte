@@ -1,12 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { enhance } from '$app/forms';
 	import RecoveryShell from '$lib/components/RecoveryShell.svelte';
 	import RecoveryJourney from '$lib/components/RecoveryJourney.svelte';
 	import type { PageProps } from './$types';
 
-	let { data }: PageProps = $props();
+	let { data, form }: PageProps = $props();
+	let pausing = $state(false);
 	let selectedShop = $state('');
 	let refreshing = $state(false);
+	let refreshVersion = 0;
 	let refreshFailed = $state(false);
 	let refreshedSummary = $state<typeof data.summary>(null);
 	const summary = $derived(refreshedSummary ?? data.summary);
@@ -21,17 +24,18 @@
 	const updated = $derived(summary?.asOf
 		? new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: zone }).format(new Date(summary.asOf))
 		: null);
-	async function refresh() {
-		if (refreshing) return;
+	async function refresh(force = false) {
+		if (refreshing && !force) return;
+		const version = ++refreshVersion;
 		refreshing = true;
 		try {
 			const response = await fetch('/recovery/summary', { cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
 			if (!response.ok) throw new Error('summary_unavailable');
-			refreshedSummary = await response.json();
-			refreshFailed = false;
+			const next = await response.json();
+			if (version === refreshVersion) { refreshedSummary = next; refreshFailed = false; }
 		}
-		catch { refreshFailed = true; }
-		finally { refreshing = false; }
+		catch { if (version === refreshVersion) refreshFailed = true; }
+		finally { if (version === refreshVersion) refreshing = false; }
 	}
 	onMount(() => {
 		const timer = setInterval(() => { void refresh(); }, 30_000);
@@ -56,11 +60,26 @@
 		</div>
 		<div class="title-row">
 			<div><h1>Heute im Überblick</h1><p class="date">{day}</p></div>
-			<button class="refresh" onclick={refresh} disabled={refreshing} aria-label="Heutige Zahlen aktualisieren">
+			<button class="refresh" onclick={() => refresh()} disabled={refreshing} aria-label="Heutige Zahlen aktualisieren">
 				<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.5 6.5A6.3 6.3 0 1 0 16 12M15.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
 				{refreshing ? 'Aktualisiere …' : 'Aktualisieren'}
 			</button>
 		</div>
+		{#if shop}
+			<div class="campaign-control">
+				<p>{shop.enabled ? 'Automatische Anrufe freigegeben' : 'Automatische Anrufe pausiert'}</p>
+				{#if shop.enabled && data.canPause}
+					<form method="POST" action="?/pause" use:enhance={() => {
+						pausing = true;
+						return async ({ update }) => { try { await update(); refreshedSummary = null; await refresh(true); } finally { pausing = false; } };
+					}}>
+						<input type="hidden" name="shopId" value={shop.id} />
+						<button class="refresh" type="submit" disabled={pausing}>{pausing ? 'Pausiere …' : 'Anrufe pausieren'}</button>
+					</form>
+				{/if}
+			</div>
+		{/if}
+		{#if form?.error}<p class="pause-message" role="alert">{form.error}</p>{/if}
 		<!-- Two equal columns: 2 × (canvas / 2) = full canvas; phone keeps one shared edge. -->
 		<section class="metrics" aria-label="Heutige Recovery-Ergebnisse" aria-busy={refreshing}>
 			<article class="metric">
@@ -73,7 +92,7 @@
 				<p class="figure" class:missing={failed} class:positive={!failed && shop?.confirmedCheckoutsToday > 0}>{failed ? '—' : number(shop?.confirmedCheckoutsToday ?? 0)}</p>
 				<p class="definition">Nach verbundenem Gespräch bezahlt</p>
 			</article>
-			{#if failed}<div class="metric-error" role="alert"><span>{data.loadError || 'Die Aktualisierung ist fehlgeschlagen.'}</span><button onclick={refresh} disabled={refreshing}>Erneut versuchen</button></div>{/if}
+			{#if failed}<div class="metric-error" role="alert"><span>{data.loadError || 'Die Aktualisierung ist fehlgeschlagen.'}</span><button onclick={() => refresh()} disabled={refreshing}>Erneut versuchen</button></div>{/if}
 		</section>
 		<div class="freshness"><span>{updated ? `Stand ${updated} Uhr` : 'Noch kein Datenstand'} · {zone}</span></div>
 		{#if !failed}
@@ -95,6 +114,7 @@
 
 <style>
 	.overview{padding-bottom:0}
+	.campaign-control{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px}.campaign-control p{margin:0;color:var(--muted);font-size:13px}.campaign-control form{margin:0}.pause-message{font-size:14px;color:var(--text);margin:0 0 24px}
 	button,select{font:inherit}button{cursor:pointer}button:disabled{cursor:wait}
 	.scope-row{display:flex;align-items:baseline;gap:12px;margin-bottom:24px;flex-wrap:wrap}.scope-row p{margin:0}.shop-name{font-weight:500}.shop-domain{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 	.shop-choice{display:flex;align-items:center;gap:12px;font-size:13px}.shop-choice select{height:40px;padding:0 32px 0 12px;background:var(--surface);border:1px solid var(--control);border-radius:6px;color:var(--text);max-width:100%}

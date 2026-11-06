@@ -264,6 +264,56 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.deepEqual((await db.query('SELECT status,ended_at,cost_cents FROM recovery_calls WHERE id=$1',[call.id])).rows[0],ended);
     });
 
+    await t.test('merchant pause is admin-only, tenant scoped and stops further calls without changing settings',async()=>{
+        const f=await fixture(),other=await fixture();await activate(f);await activate(other);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        const call=await fakeCall(f);
+        const admin=(await db.query("SELECT id FROM platform_users WHERE customer_id=$1 AND role='admin'",[f.customerId])).rows[0].id;
+        await assert.rejects(s.pauseShop(other.customerId,f.shopId,admin),{code:'admin_required'});
+        await assert.rejects(s.pauseShop(f.customerId,other.shopId,admin),{code:'shop_not_found'});
+        await assert.rejects(s.pauseShop(f.customerId,f.shopId,'invalid'),{code:'admin_required'});
+        const before=await s.shopFor(f.customerId,f.shopId);
+        assert.deepEqual(await s.pauseShop(f.customerId,f.shopId,admin),{paused:true});
+        const paused=await s.shopFor(f.customerId,f.shopId);
+        assert.equal(paused.enabled,false);assert.deepEqual(paused.rules,before.rules);
+        assert.equal(+paused.campaign_started_at,+before.campaign_started_at);
+        assert.equal((await s.shopFor(other.customerId,other.shopId)).enabled,true);
+        assert.equal(hangup.mock.calls.at(-1).arguments[0],`recovery-${call.id}`);
+        assert.equal(p.eligibility(await s.state(db,paused,f.checkoutId)),'merchant_not_approved');
+        assert.equal((await s.dailySummary(f.customerId)).shops[0].enabled,false);
+        await s.pauseShop(f.customerId,f.shopId,admin);
+        assert.equal((await db.query("SELECT COUNT(*)::int n FROM recovery_events WHERE shop_id=$1 AND kind='campaign_paused'",[f.shopId])).rows[0].n,1);
+    });
+
+    await t.test('mailbox hangup persists its terminal intent, blocks actions and retries scoped cleanup',async()=>{
+        const f=await fixture(),other=await fixture(); await activate(f); const call=await fakeCall(f);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        await assert.rejects(s.endUnreached({...call,customer_id:other.customerId},'voicemail'),{code:'invalid_call_token'});
+        await assert.rejects(s.endUnreached(call,'interested'),{code:'invalid_unreached_outcome'});
+        const token=randomUUID().replaceAll('-','')+randomUUID().replaceAll('-','');
+        await db.query('UPDATE recovery_calls SET token_hash=$2 WHERE id=$1',[call.id,s.hash(token)]);
+        const before=hangup.mock.calls.length, smsBefore=sms.mock.calls.length;
+        hangup.mock.mockImplementation(async()=>{throw new Error('synthetic hangup timeout');});
+        try {
+            await assert.rejects(s.endUnreached(call,'voicemail'),/synthetic hangup timeout/);
+            const stored=(await db.query('SELECT outcome,status,ended_at FROM recovery_calls WHERE id=$1',[call.id])).rows[0];
+            assert.deepEqual(stored,{outcome:'voicemail',status:'unknown',ended_at:null});
+            await assert.rejects(s.callContext(token),{code:'invalid_call_token'});
+            await s.callContext(token,true);
+            await assert.rejects(s.getContext(call),/./);
+        } finally {hangup.mock.mockImplementation(async()=>{});}
+        await hooks.reconcileStops(f.shopId);
+        assert.equal(hangup.mock.calls.at(-1).arguments[0],`recovery-${call.id}`);
+        assert.deepEqual(await s.endUnreached(call,'no_answer'),{ended:true});
+        assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[call.id])).rows[0].outcome,'voicemail');
+        const calls=hangup.mock.calls.length;
+        assert.deepEqual(await s.endUnreached(call,'voicemail'),{ended:true});
+        assert.equal(hangup.mock.calls.length,calls);assert.ok(calls>before);
+        assert.equal(sms.mock.calls.length,smsBefore);
+        assert.equal((await db.query('SELECT stopped_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0].stopped_at,null);
+        assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM recovery_events WHERE call_id=$1 AND kind='unreached_hangup_requested'",[call.id])).rows[0].n,1);
+    });
+
     await t.test('failed cleanup stays unconfirmed and only an exact SDK missing-room response counts as absence',async () => {
         const { TwirpError }=require('livekit-server-sdk');
         const f=await fixture(); await activate(f); const call=await fakeCall(f);
@@ -491,9 +541,9 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
     await t.test('startup context rejects ended, expired and opted-out calls', async () => {
         const f=await fixture();await activate(f);const call={...await fakeCall(f),identity_verified:false};
         await db.query('UPDATE recovery_calls SET identity_verified=FALSE,expires_at=NOW() WHERE id=$1',[call.id]);
-        await assert.rejects(s.getContext(call),/call_authorization_changed/);
+        await assert.rejects(require('../src/recovery/catalog').authorized(call),/call_authorization_changed/);
         await db.query("UPDATE recovery_calls SET expires_at=NOW()+INTERVAL '10 minutes',ended_at=NOW() WHERE id=$1",[call.id]);
-        await assert.rejects(s.getContext(call),/call_authorization_changed/);
+        await assert.rejects(require('../src/recovery/catalog').authorized(call),/call_authorization_changed/);
         await db.query('UPDATE recovery_calls SET ended_at=NULL WHERE id=$1',[call.id]);
         await s.stopContact(f.customerId,f.shopId,f.checkoutId);
         await assert.rejects(s.getContext(call),/contact_stopped/);

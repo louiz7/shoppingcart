@@ -2,11 +2,12 @@
 
 const { db } = require('./store');
 const service = require('./service');
+const policy = require('./policy');
 const { reconcileStops } = require('./webhooks');
 
 async function tick() {
     await reconcileStops();
-    const { rows: shops } = await db.query(`SELECT id,customer_id,campaign_started_at FROM recovery_shops WHERE enabled AND approved_at IS NOT NULL AND mode='live'`);
+    const { rows: shops } = await db.query(`SELECT id,customer_id,mode,campaign_started_at FROM recovery_shops WHERE enabled AND approved_at IS NOT NULL AND mode='live'`);
     for (const shop of shops) {
         try {
             await service.syncShop(shop.customer_id, shop.id);
@@ -14,9 +15,9 @@ async function tick() {
                 ON p.shop_id=c.shop_id AND p.contact_key=c.contact_key
                 WHERE c.shop_id=$1 AND c.status='pending' AND c.completed_at IS NULL
                 AND ($2::timestamptz IS NULL OR c.source_updated_at >= $2)
-                AND p.consented_at IS NOT NULL AND p.expires_at>NOW() AND p.stopped_at IS NULL
-                AND p.revoked_at IS NULL AND p.consent_checkout_id=c.id AND p.arm IS DISTINCT FROM 'control'
-                ORDER BY c.last_evaluated_at NULLS FIRST,c.source_updated_at LIMIT 25`, [shop.id,shop.campaign_started_at]);
+                AND ($3::boolean OR (p.consented_at IS NOT NULL AND p.expires_at>NOW() AND p.consent_checkout_id=c.id))
+                AND p.stopped_at IS NULL AND p.revoked_at IS NULL AND p.arm IS DISTINCT FROM 'control'
+                ORDER BY c.last_evaluated_at NULLS FIRST,c.source_updated_at LIMIT 25`, [shop.id,shop.campaign_started_at,policy.merchantManagedContacts(shop)]);
             for (const checkout of rows) {
                 try { await service.startCall(shop.customer_id, shop.id, checkout.id); }
                 catch (error) { if (!error.status) throw error; }
