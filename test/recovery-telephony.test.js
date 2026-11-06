@@ -49,6 +49,23 @@ test('dedicated routing is selected only by the authenticated shop ID, including
     await telephony.sendSms('+4900000000005','Synthetic',shop,shop);
     assert.equal(request.mock.calls[0].arguments[1].body.get('From'),'+4900000000004');
     assert.equal(telephony.assertSmsReady(other).sender,'+4900000000002');
+    const dedicated={trunkId:'ST_dedicated',callerId:'+4900000000003',smsFrom:'+4900000000004',smsSenderIdDE:'DESKSPACE'};
+    process.env.RECOVERY_SHOP_TELEPHONY=JSON.stringify({[shop]:dedicated});
+    await telephony.sendSms('+4900000000005','Synthetic article https://example.invalid/article',shop,shop);
+    const branded=request.mock.calls.at(-1).arguments[1].body;
+    assert.equal(branded.get('From'),'DESKSPACE');assert.equal(branded.get('To'),'+4900000000005');
+    assert.equal(branded.get('Body'),'Synthetic article https://example.invalid/article');
+    assert.equal(new URL(branded.get('StatusCallback')).searchParams.get('action'),shop);
+    await telephony.sendSms('+15555550123','Synthetic',shop,shop);
+    assert.equal(request.mock.calls.at(-1).arguments[1].body.get('From'),'+4900000000004');
+    await telephony.sendSms('+4900000000005','Synthetic',other,other);
+    assert.equal(request.mock.calls.at(-1).arguments[1].body.get('From'),'+4900000000002');
+    await telephony.dial({shop_id:shop,room:'recovery-branded',id:'synthetic'},'+4900000000005','synthetic');
+    assert.equal(dial.mock.calls.at(-1).arguments[3].fromNumber,'+4900000000003');
+    for(const smsSenderIdDE of ['',123,'12345','DESKSPACE_TOO_LONG','Desk Space','DESKSPACE\n','Dëskspace']) {
+        process.env.RECOVERY_SHOP_TELEPHONY=JSON.stringify({[shop]:{...dedicated,smsSenderIdDE}});
+        await assert.rejects(telephony.sendSms('+4900000000005','Synthetic',shop,shop),{code:'sms_not_configured',smsDispatched:false});
+    }
     // Voice-only numbers keep the independently configured SMS sender.
     process.env.RECOVERY_SHOP_TELEPHONY=JSON.stringify({[shop]:{trunkId:'ST_dedicated',callerId:'+4900000000003'}});
     assert.equal(telephony.assertSmsReady(shop).sender,'+4900000000002');
@@ -58,5 +75,5 @@ test('dedicated routing is selected only by the authenticated shop ID, including
         await assert.rejects(telephony.dial({shop_id:shop},'+4900000000005','synthetic'),/live_calls_disabled/);
         await assert.rejects(telephony.sendSms('+4900000000005','Synthetic',shop,shop),{code:'sms_not_configured',smsDispatched:false});
     }
-    assert.equal(dial.mock.calls.length,2);assert.equal(request.mock.calls.length,1);
+    assert.equal(dial.mock.calls.length,3);assert.equal(request.mock.calls.length,4);
 });

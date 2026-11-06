@@ -12,15 +12,17 @@ function routing(shopId) {
         for (const [id,route] of Object.entries(routes)) {
             if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id) || !route ||
                 typeof route !== 'object' || Array.isArray(route) ||
-                Object.keys(route).some(key=>!['trunkId','callerId','smsFrom'].includes(key)) ||
+                Object.keys(route).some(key=>!['trunkId','callerId','smsFrom','smsSenderIdDE'].includes(key)) ||
                 !/^ST_[A-Za-z0-9_]+$/.test(route.trunkId || '') || phone(route.callerId)!==route.callerId ||
-                (route.smsFrom !== undefined && phone(route.smsFrom)!==route.smsFrom)) throw new Error();
+                (route.smsFrom !== undefined && phone(route.smsFrom)!==route.smsFrom) ||
+                (route.smsSenderIdDE !== undefined && (typeof route.smsSenderIdDE!=='string' ||
+                    route.smsSenderIdDE!==route.smsSenderIdDE.trim() || !/^[A-Za-z][A-Za-z0-9]{0,10}$/.test(route.smsSenderIdDE)))) throw new Error();
         }
     } catch { throw problem('shop_telephony_not_configured',503); }
     const route = Object.hasOwn(routes,shopId) ? routes[shopId] : null;
     return { trunkId:route?.trunkId || process.env.RECOVERY_SIP_TRUNK_ID,
         callerId:route?.callerId || process.env.RECOVERY_CALLER_ID,
-        smsFrom:route?.smsFrom || process.env.TWILIO_SMS_FROM };
+        smsFrom:route?.smsFrom || process.env.TWILIO_SMS_FROM, smsSenderIdDE:route?.smsSenderIdDE };
 }
 
 function configured(shopId) {
@@ -66,28 +68,32 @@ function assertSmsReady(shopId) {
     const unavailable = (code, status) => Object.assign(problem(code, status), { smsDispatched: false });
     if (process.env.RECOVERY_LIVE_ENABLED !== '1' || process.env.RECOVERY_SMS_ENABLED !== '1') throw unavailable('sms_disabled', 409);
     const sid = process.env.TWILIO_ACCOUNT_SID, token = process.env.TWILIO_AUTH_TOKEN;
-    let sender, callback;
+    let sender, senderIdDE, callback;
     try {
-        sender = phone(routing(shopId).smsFrom);
+        const route = routing(shopId);
+        sender = phone(route.smsFrom);
+        senderIdDE = route.smsSenderIdDE;
         callback = new URL('/webhooks/recovery/twilio', process.env.RECOVERY_PUBLIC_URL);
         if (callback.protocol !== 'https:' || callback.username || callback.password || callback.port) throw new Error();
     } catch { throw unavailable('sms_not_configured', 503); }
     if (!/^AC[a-f0-9]{32}$/i.test(sid || '') || !token || /^(replace_|""$|''$)/.test(token)) throw unavailable('sms_not_configured', 503);
-    return { sid, token, sender, callback };
+    return { sid, token, sender, senderIdDE, callback };
 }
 
 async function sendSms(number, text, actionId, shopId) {
-    const { sid, token, sender, callback } = assertSmsReady(shopId);
+    const { sid, token, sender, senderIdDE, callback } = assertSmsReady(shopId);
     try {
         if (phone(number) !== number || !/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(actionId || '') ||
             typeof text !== 'string' || !text.trim() || text.length > 1600) throw new Error();
     } catch { throw Object.assign(problem('invalid_sms_request'), { smsDispatched: false }); }
+    // Dynamic branded senders are enabled only for DE; other destinations keep their configured numeric sender.
+    const from = number.startsWith('+49') && senderIdDE ? senderIdDE : sender;
     callback.searchParams.set('action', actionId);
     const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
         headers: { Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
             'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ To: number, From: sender, Body: text, StatusCallback: callback.href }),
+        body: new URLSearchParams({ To: number, From: from, Body: text, StatusCallback: callback.href }),
     });
     if (!response.ok) throw problem('sms_provider_error', 502);
     const data = await response.json();
