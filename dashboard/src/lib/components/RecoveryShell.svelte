@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/state';
-	let { active, children }: { active: 'overview' | 'settings' | 'organizations'; children: Snippet } = $props();
+	let { active, children }: { active: 'overview' | 'settings' | 'organizations' | 'tickets'; children: Snippet } = $props();
 	const internal = $derived(page.data.user?.isRecoveryInternal === true && page.data.user?.role === 'admin');
 </script>
 
@@ -14,6 +14,7 @@
 			</a></div>
 			<nav aria-label="Hauptnavigation">
 				<a href="/recovery" aria-current={active === 'overview' ? 'page' : undefined}>Übersicht</a>
+				<a href="/recovery/tickets" aria-current={active === 'tickets' ? 'page' : undefined}>Tickets</a>
 				<a href="/recovery/settings" aria-current={active === 'settings' ? 'page' : undefined}>Einstellungen</a>
 				{#if internal}<a href="/recovery/organizations" aria-current={active === 'organizations' ? 'page' : undefined}>Organisationen</a>{/if}
 			</nav>
@@ -41,5 +42,5 @@
 	.app-main{padding:32px;background:var(--surface);border:1px solid transparent;border-radius:16px}footer{padding:24px 32px 32px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:16px}footer a{color:var(--muted);text-decoration:none}footer a:hover{color:var(--text);text-decoration:underline;text-underline-offset:4px}footer a span{margin-left:6px}
 	a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
 	@media(max-width:768px){.header-inner,.app-main,footer{width:calc(100% - 32px)}.header-inner{gap:32px;padding-inline:24px}.app-main{padding:24px}footer{padding-inline:24px}}
-	@media(max-width:640px){.header-inner{min-height:0;display:grid;grid-template-columns:1fr auto;gap:0;padding-inline:4px}.brand-block{min-height:76px}.header-inner form{grid-column:2;grid-row:1}nav{grid-column:1/-1;grid-row:2;gap:24px;margin-bottom:16px}nav a{min-height:44px}.app-main{padding:20px}footer{padding:20px 4px 28px;flex-direction:column;gap:4px}footer a{display:inline-flex;align-items:center;min-height:44px}}
+	@media(max-width:760px){.header-inner{min-height:0;display:grid;grid-template-columns:1fr auto;gap:0;padding-inline:4px}.brand-block{min-height:76px}.header-inner form{grid-column:2;grid-row:1}nav{grid-column:1/-1;grid-row:2;gap:20px;margin-bottom:16px;overflow-x:auto}nav a{min-height:44px;flex-shrink:0}.app-main{padding:20px}footer{padding:20px 4px 28px;flex-direction:column;gap:4px}footer a{display:inline-flex;align-items:center;min-height:44px}}
 </style>

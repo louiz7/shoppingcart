@@ -35,6 +35,15 @@ test('browser demo isolates contacts, validates offers and prepares only public 
  await assert.rejects(demo.tool(browser,'connected'),{code:'invalid_demo_session'});
  let user=await message('user');await message('assistant');await demo.tool(token,'confirm_contact',{userEventId:user});
  assert.equal((await demo.tool(token,'context')).cart.items[0].title,'Test item');
+ for(const name of ['create_order','orderCreate','draftOrderComplete','complete_checkout','pay','graphql']) {
+  await assert.rejects(demo.tool(token,name,{authorized:true,query:'mutation { orderCreate { order { id } } }'}),{code:'unknown_demo_tool'});
+ }
+
+ const ticketInput={reason:'unresolved_question',summary:'Synthetic unresolved product question',callbackRequested:false,userEventId:user};
+ await assert.rejects(demo.tool(token,'followup_ticket',{...ticketInput,userEventId:randomUUID()}),{code:'conversation_changed'});
+ const ticket=await demo.tool(token,'followup_ticket',ticketInput);assert.equal(ticket.status,'simulated');
+ assert.equal((await demo.tool(token,'followup_ticket',ticketInput)).ticketId,ticket.ticketId);
+ assert.equal(JSON.stringify((await db.query('SELECT data FROM recovery_demo_sessions WHERE id=$1',[id])).rows).includes(ticketInput.summary),false);
  await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'123',userEventId:randomUUID()}),{code:'conversation_changed'});
  await assert.rejects(demo.tool(token,'send_help_article',{variantId:'gid://shopify/ProductVariant/999',articleId:'123',userEventId:user}),{code:'unknown_product'});
  await assert.rejects(demo.tool(token,'send_help_article',{variantId:cart.items[0].variantId,articleId:'999',userEventId:user}),{code:'help_article_unavailable'});

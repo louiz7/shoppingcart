@@ -49,6 +49,7 @@ async function saveSettings(customerId, shopId, input) {
         if (input.enabled && shop.mode === 'live' && !shop.webhooks_ready) throw policy.problem('webhooks_not_ready', 409);
         if (input.enabled && input.approval !== true && !shop.approved_at) throw policy.problem('explicit_merchant_approval_required');
         await client.query(`UPDATE recovery_shops SET brand=$3,brand_voice=$4,rules=$5,enabled=$6,
+            campaign_started_at=CASE WHEN $6 AND mode='live' THEN COALESCE(campaign_started_at,NOW()) ELSE campaign_started_at END,
             approved_at=CASE WHEN $7 THEN NOW() ELSE approved_at END WHERE id=$1 AND customer_id=$2`,
         [shop.id, customerId, input.brand.trim(), input.brand_voice, JSON.stringify(nextRules), input.enabled, input.approval === true]);
         await event(client, shop.id, 'settings_saved', { enabled: input.enabled, rules: nextRules });
@@ -642,5 +643,5 @@ async function dashboard(customerId) {
     };
 }
 
-module.exports = { uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
+module.exports = { conversationEvidence, uuid, hash, shopFor, state, saveSettings, updateAgentProfile, consent, upsertCheckout, syncShop, refresh, startCall,
     stopContact, callContext, endCall, getContext, recordConnection, dailySummary, getOffer, sendLink, sendHelpArticle, recordTranscript, confirmContact, outcome, dashboard };

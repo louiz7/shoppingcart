@@ -16,6 +16,7 @@ async function ingestShopify(shop, topic, payload, eventId) {
             ON CONFLICT DO NOTHING RETURNING event_id`, [shop.id, eventId]);
         if (!inserted.rowCount) return { duplicate: true };
         if (topic === 'app/uninstalled' || topic === 'shop/redact') {
+            await client.query('DELETE FROM recovery_followup_tickets t USING recovery_calls a WHERE t.call_id=a.id AND a.shop_id=$1',[shop.id]);
             await client.query(`DELETE FROM recovery_sms_links l USING recovery_actions a,recovery_checkouts c
                 WHERE l.action_id=a.id AND a.checkout_id=c.id AND c.shop_id=$1`,[shop.id]);
             await client.query(`UPDATE recovery_shops SET enabled=FALSE,approved_at=NULL,credentials_encrypted=NULL,webhooks_ready=FALSE WHERE id=$1`, [shop.id]);
@@ -29,6 +30,8 @@ async function ingestShopify(shop, topic, payload, eventId) {
             }
         } else if (topic === 'customers/redact') {
             const customerId = `gid://shopify/Customer/${payload.customer?.id}`;
+            await client.query(`DELETE FROM recovery_followup_tickets t USING recovery_calls a,recovery_checkouts c
+                WHERE t.call_id=a.id AND a.checkout_id=c.id AND c.shop_id=$1 AND c.snapshot->>'customerId'=$2`,[shop.id,customerId]);
             await client.query(`DELETE FROM recovery_sms_links l USING recovery_actions a,recovery_checkouts c
                 WHERE l.action_id=a.id AND a.checkout_id=c.id AND c.shop_id=$1 AND c.snapshot->>'customerId'=$2`,[shop.id,customerId]);
             // Preserve only non-reversible suppression hashes; remove identifying history.

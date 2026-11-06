@@ -75,6 +75,70 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         return s.sendLink(call,useDiscount,rows[0]?.data.eventId);
     }
 
+    await t.test('exception tickets are bounded, deduplicated, isolated and removed on privacy requests',async()=>{
+        const tickets=require('../src/recovery/followup-tickets');
+        const f=await fixture(),other=await fixture();await activate(f);const call=await fakeCall(f);
+        const userId=Number((await db.query('SELECT id FROM platform_users WHERE customer_id=$1',[f.customerId])).rows[0].id);
+        const otherUser=Number((await db.query('SELECT id FROM platform_users WHERE customer_id=$1',[other.customerId])).rows[0].id);
+        const input={reason:'unresolved_question',summary:'Exact frame compatibility is not in the product documentation.',callbackRequested:false,userEventId:randomUUID()};
+        await assert.rejects(tickets.create(call,input),{code:'conversation_changed'});
+        await s.recordTranscript(call,{role:'user',text:'Please have the shop check the frame compatibility.',eventId:input.userEventId});
+        assert.equal((await tickets.create(call,input)).status,'simulated');
+        assert.equal((await tickets.list(f.customerId,userId)).tickets.length,0);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        for (const patch of [{summary:''},{summary:'x'.repeat(601)},{summary:'bad\nsummary'},{reason:'sell_harder'},{callbackRequested:'yes'}]) {
+            await assert.rejects(tickets.create(call,{...input,...patch}),{code:'invalid_followup_ticket'});
+        }
+        const created=await tickets.create(call,input);
+        assert.equal(created.status,'created');assert.equal(created.callbackRequested,false);
+        const repeated=await tickets.create(call,input);assert.equal(repeated.status,'existing');assert.equal(repeated.ticketId,created.ticketId);
+        const before=(await tickets.list(f.customerId,userId)).tickets;
+        assert.equal(before.length,1);assert.equal(before[0].phone,null);
+        assert.equal((await tickets.list(other.customerId,otherUser)).tickets.length,0);
+        await assert.rejects(tickets.list(f.customerId,otherUser),{code:'forbidden'});
+        await assert.rejects(tickets.resolve(other.customerId,otherUser,created.ticketId),{code:'ticket_not_found'});
+        input.userEventId=randomUUID();await s.recordTranscript(call,{role:'user',text:'Please call me back about compatibility.',eventId:input.userEventId});
+        assert.equal((await tickets.create(call,{...input,callbackRequested:true})).callbackRequested,true);
+        assert.equal((await tickets.list(f.customerId,userId)).tickets[0].phone,f.snapshot.phone);
+        await db.query('UPDATE recovery_checkouts SET phone=$2 WHERE id=$1',[f.checkoutId,'+4900000000002']);
+        assert.equal((await tickets.list(f.customerId,userId)).tickets[0].phone,f.snapshot.phone);
+        await db.query('UPDATE recovery_checkouts SET phone=$2 WHERE id=$1',[f.checkoutId,f.snapshot.phone]);
+        const fresh=randomUUID();await s.recordTranscript(call,{role:'user',text:'A further question.',eventId:fresh});
+        await assert.rejects(tickets.create(call,input),{code:'conversation_changed'});
+        await db.query("UPDATE recovery_events SET created_at=NOW()-INTERVAL '3 minutes' WHERE call_id=$1",[call.id]);
+        await assert.rejects(tickets.create(call,{...input,userEventId:fresh}),{code:'conversation_changed'});
+        await db.query("UPDATE platform_users SET role='viewer' WHERE id=$1",[userId]);
+        assert.equal((await tickets.list(f.customerId,userId)).canEdit,false);
+        await assert.rejects(tickets.resolve(f.customerId,userId,created.ticketId),{code:'forbidden'});
+        await db.query("UPDATE platform_users SET role='admin' WHERE id=$1",[userId]);
+        await db.query('UPDATE customers SET is_rescova_internal=TRUE WHERE id=$1',[other.customerId]);
+        assert.ok((await tickets.list(other.customerId,otherUser)).tickets.some(t=>t.id===created.ticketId));
+        await tickets.resolve(other.customerId,otherUser,created.ticketId);
+        const resolved=(await tickets.list(f.customerId,userId)).tickets[0].resolvedAt;
+        await tickets.resolve(f.customerId,userId,created.ticketId);
+        assert.equal(+(await tickets.list(f.customerId,userId)).tickets[0].resolvedAt,+resolved);
+        await s.stopContact(f.customerId,f.shopId,f.checkoutId);
+        const blocked=(await tickets.list(f.customerId,userId)).tickets[0];assert.equal(blocked.phone,null);assert.equal(blocked.contactBlocked,true);
+        await assert.rejects(tickets.create(call,{...input,userEventId:fresh}),{code:'contact_stopped'});
+        await hooks.ingestShopify(f.shop,'customers/redact',{customer:{id:1}},randomUUID());
+        assert.equal((await tickets.list(f.customerId,userId)).tickets.length,0);
+        assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1',[f.checkoutId])).rows[0].n,0);
+    });
+
+    await t.test('ticket retention and uninstall remove exception summaries',async()=>{
+        const tickets=require('../src/recovery/followup-tickets'),f=await fixture();await activate(f);const call=await fakeCall(f);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        const input={reason:'technical_failure',summary:'Checkout link failed after retry.',callbackRequested:false,userEventId:randomUUID()};
+        await s.recordTranscript(call,{role:'user',text:'The checkout is still unavailable.',eventId:input.userEventId});
+        const created=await tickets.create(call,input);
+        await db.query("UPDATE recovery_followup_tickets SET created_at=NOW()-INTERVAL '31 days' WHERE id=$1",[created.ticketId]);
+        await require('../src/recovery/worker').purgeExpiredData(f.shopId);
+        assert.equal((await db.query('SELECT id FROM recovery_followup_tickets WHERE call_id=$1',[call.id])).rowCount,0);
+        await tickets.create(call,input);
+        await hooks.ingestShopify(f.shop,'app/uninstalled',{},randomUUID());
+        assert.equal((await db.query('SELECT id FROM recovery_followup_tickets WHERE call_id=$1',[call.id])).rowCount,0);
+    });
+
     await t.test('an undecided service conversation does not suppress a contact',async()=>{
         const f=await fixture();await activate(f);const call=await fakeCall(f);
         await s.outcome(call,{outcome:'undecided',summary:'Only browsing, no refusal or opt-out.'});
@@ -103,6 +167,28 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         await assert.rejects(s.syncShop(f.customerId,f.shopId),/checkout_unverified/);
         list.mock.mockImplementation(async()=>{throw p.problem('shopify_unavailable',502);});
         await assert.rejects(s.syncShop(f.customerId,f.shopId),/shopify_unavailable/);
+    });
+
+    await t.test('valid recovery call credentials cannot create, complete or pay an order', async () => {
+        const f=await fixture();await activate(f);const call=await fakeCall(f),token='e'.repeat(64);
+        await db.query('UPDATE recovery_calls SET token_hash=$2 WHERE id=$1',[call.id,s.hash(token)]);
+        const express=require('express'),app=express();app.use(express.json());
+        app.use('/internal/recovery/tools',require('../src/recovery/routes').toolsRouter);
+        const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
+        const previous=process.env.INTERNAL_TOOL_SECRET;process.env.INTERNAL_TOOL_SECRET='synthetic-no-purchase-secret';
+        try {
+            const beforeActions=(await db.query('SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1',[f.checkoutId])).rows[0].n;
+            for(const name of ['create_order','orderCreate','draftOrderComplete','complete_checkout','pay','graphql']) {
+                const response=await originalFetch(`http://127.0.0.1:${server.address().port}/internal/recovery/tools/${name}`,{
+                    method:'POST',headers:{'Content-Type':'application/json','x-internal-secret':process.env.INTERNAL_TOOL_SECRET,'x-call-token':token},
+                    body:JSON.stringify({authorized:true,query:'mutation { orderCreate { order { id } } }'})});
+                assert.equal(response.status,404,name);assert.equal((await response.json()).error,'unknown_tool',name);
+            }
+            assert.equal((await db.query('SELECT count(*)::int AS n FROM recovery_actions WHERE checkout_id=$1',[f.checkoutId])).rows[0].n,beforeActions);
+        } finally {
+            await new Promise(resolve=>server.close(resolve));
+            if(previous===undefined)delete process.env.INTERNAL_TOOL_SECRET;else process.env.INTERNAL_TOOL_SECRET=previous;
+        }
     });
 
     await t.test('post-tool speech timing validates attribution and persists separately from API latency', async () => {

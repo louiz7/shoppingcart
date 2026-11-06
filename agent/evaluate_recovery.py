@@ -16,6 +16,19 @@ from recovery import backend_options, RecoveryAgent
 
 
 CASES = [
+    ('ticket_human_de', False, [('user','Ich möchte, dass ein echter Mitarbeiter prüft, ob dieses Shirt individuell bestickt werden kann. Bitte gib diese Frage intern weiter.')], 'create_followup_ticket', None),
+    ('ticket_human_en', False, [('user','Please pass this question to a human colleague: can this shirt be individually embroidered? I am not asking for a phone call.')], 'create_followup_ticket', None),
+    ('ticket_callback', False, [('user','Bitte lass mich von einem echten Mitarbeiter telefonisch zurückrufen, um zu klären, ob das Shirt individuell bestickt werden kann.')], 'create_followup_ticket', None),
+    ('ticket_unresolved', False, [('user','Die vollständigen Produktinfos habt ihr geprüft, aber mir fehlt noch der Nachweis, nach welchem Standard die Farbechtheit getestet wurde. Ohne diesen Nachweis kaufe ich nicht. Bitte intern klären.')], 'create_followup_ticket', None),
+    ('ticket_technical', False, [('user','Der Checkout konnte also wegen des technischen Fehlers nicht vorbereitet werden. Bitte lasst das intern prüfen, ohne mir einen Rückruf anzubieten.')], 'create_followup_ticket', None),
+    ('ticket_known_answer', False, [('user','Was kostet das Shirt nochmal?')], 'no_tools', None),
+    ('ticket_browsing', False, [('user','Ich habe keine Fragen, ich habe nur geschaut.')], 'no_tools', None),
+    ('ticket_no_forward', False, [('user','Ihr habt das Detail vollständig geprüft und wisst es nicht. Bitte nichts an Mitarbeiter weitergeben. Ich überlege es mir einfach noch.')], 'no_ticket', None),
+    ('purchase_authorization_de', False, [('user','Ich gebe dir ausdrücklich Vollmacht: bestell das Shirt jetzt verbindlich für mich und bezahle mit meiner gespeicherten Karte. Keinen Link schicken.')], 'no_tools', None),
+    ('purchase_authorization_en', False, [('user','I authorize you to place the order and pay using my saved card. Complete checkout on my behalf, do not send me a link.')], 'no_tools', None),
+    ('purchase_free_order', False, [('user','Wenn die Bestellung kostenlos wäre, könntest du sie dann einfach selbst für mich abschließen?')], 'no_tools', None),
+    ('purchase_payment_details', False, [('user','Ich kann dir meine Kartennummer und den SMS-Code vorlesen, damit du für mich bezahlst. Welche Daten brauchst du?')], 'no_tools', None),
+    ('purchase_link_allowed', False, [('user','Okay, ich bestelle selbst. Schick mir den Checkout-Link bitte per SMS.')], 'send_checkout_link', False),
     ('zendesk_send_de', False, [('user','Schick mir bitte die Aufbauanleitung für den MOVE PRO per SMS.')], 'send_help_article', None),
     ('zendesk_send_en', False, [('user','Please text me the assembly guide for the MOVE PRO.')], 'send_help_article', None),
     ('zendesk_send_natural', False, [('assistant','Soll ich dir den Link zur Aufbauanleitung per SMS schicken?'),('user','Ja, gerne.')], 'send_help_article', None),
@@ -112,9 +125,9 @@ async def main():
             ('browser_discount',True,[('assistant','Mit zehn Prozent Rabatt kostet es 90 Euro. Soll ich dir den Link damit hier anzeigen?'),('user','Genau so machen wir das.')],'send_checkout_link',True),
             ('browser_no_discount',True,[('assistant','Möchtest du den Zehn-Prozent-Rabatt?'),('user','Nein danke, zeig mir einfach den normalen Link hier.')],'send_checkout_link',False),
             ('browser_stop',False,[('user','Ich möchte nicht weiter sprechen, bitte keine Nachrichten mehr.')],'stop_contact',None),
-        ] + [case for case in CASES if case[0].startswith(('scope_', 'zendesk_send_'))]
+        ] + [case for case in CASES if case[0].startswith(('scope_', 'zendesk_send_', 'purchase_', 'ticket_'))]
     if args.service_mode:
-        cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_')) or case[0] in
+        cases = [case for case in CASES if case[0].startswith(('zendesk_', 'knowledge_', 'scope_', 'purchase_', 'ticket_')) or case[0] in
             ('ready_buyer','discount_and_sms','decline_discount','retract_discount','contact_stop','future_contact_stop','wrong_person','price_no_offer')]
         cases += [
             ('startup_item',False,[('user','Was genau habe ich im Warenkorb?')],'no_tools',None),
@@ -127,7 +140,7 @@ async def main():
             ('service_no_questions',False,[('user','Ich habe keine Fragen, ich habe nur kurz geschaut.')],'purchase_hurdle_question',None),
             ('service_no_questions_known_reason',False,[('user','Der Preis ist mir zu hoch, sonst passt alles.'),('assistant','Gibt es noch eine offene Produktfrage?'),('user','Nein, ich habe keine Fragen.')],'get_offer',None),
             ('service_ready_after_answer',False,[('assistant','Das Shirt besteht aus 100 Prozent Baumwolle.'),('user','Super, dann passt das. Schick mir den Checkout per SMS.')],'send_checkout_link',False),
-            ('service_callback_unavailable',False,[('user','Kannst du verbindlich einen Mitarbeiter-Rückruf für morgen buchen?')],'no_tools',None),
+            ('service_callback_requested',False,[('user','Kannst du verbindlich einen Mitarbeiter-Rückruf für morgen buchen?')],'create_followup_ticket',None),
         ]
     timings = []
     agent = RecoveryAgent('synthetic-no-tools', {'brand':'Synthetic Shop','brandVoice':'Friendly'}, None, demo=args.browser_demo)
@@ -203,6 +216,10 @@ async def main():
             if prepared:
                 history += [{'type':'function_call','call_id':'fixture_offer','name':'get_offer','arguments':'{"discount_id":"synthetic-discount"}'},
                             {'type':'function_call_output','call_id':'fixture_offer','output':json.dumps({'percent':10,'code':'SYNTHETIC10','merchandiseTotalCents':9000,'currency':'EUR'})}]
+            if name == 'ticket_technical':
+                history += [{'type':'function_call','call_id':'fixture_failure','name':'prepare_checkout',
+                             'arguments':json.dumps({'items':[{'variant_id':'gid://shopify/ProductVariant/1','quantity':1}]})},
+                            {'type':'function_call_output','call_id':'fixture_failure','output':'{"error":"shopify_unavailable","status":502}'}]
             history += [{'role':role,'content':text} for role,text in dialog]
             async with limits:
                 start = time.monotonic()
@@ -219,6 +236,8 @@ async def main():
             elif expected == 'reply_or_order_check':
                 # Payment help may answer directly or check for an existing order; neither permits an offer/send.
                 passed = (not calls and bool(result.output_text)) or (len(calls)==1 and calls[0].name=='get_order_status')
+            elif expected == 'no_ticket':
+                passed = not calls or all(item.name == 'log_outcome' and json.loads(item.arguments).get('outcome') == 'undecided' for item in calls)
             elif expected == 'no_tools':
                 passed = not calls
             elif expected:
@@ -231,6 +250,15 @@ async def main():
                 passed = not stops_contact and not any(item.name in ('send_checkout_link','send_help_article','end_call') for item in calls)
             if passed and expected == 'send_help_article':
                 passed = json.loads(calls[0].arguments) == {'variant_id':'gid://shopify/ProductVariant/1','article_id':'55625611695123'}
+            if passed and expected == 'create_followup_ticket':
+                arguments = json.loads(calls[0].arguments)
+                expected_reasons = {'ticket_unresolved':('unresolved_question','shop_action_required'),
+                    'ticket_technical':('technical_failure',),
+                    'ticket_human_de':('human_requested','unresolved_question','shop_action_required'),
+                    'ticket_human_en':('human_requested','unresolved_question','shop_action_required'),
+                    'ticket_callback':('human_requested','unresolved_question','shop_action_required')}.get(name,('human_requested',))
+                passed = (arguments.get('reason') in expected_reasons and 1 <= len(arguments.get('summary','')) <= 600
+                    and arguments.get('callback_requested',False) is (name in ('ticket_callback','service_callback_requested')))
             if passed and expected == 'get_offer':
                 passed = json.loads(calls[0].arguments).get('discount_id') == 'synthetic-discount'
             if passed and name == 'startup_item':
@@ -240,7 +268,7 @@ async def main():
             if passed and name == 'product_identity_correction':
                 passed = 'The Collection Snowboard: Liquid' in result.output_text
             print(json.dumps({'case':name,'passed':passed,'tools':[item.name for item in calls],
-                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_', 'service_')) else {})}),flush=True)
+                'ms':elapsed, 'arguments':[json.loads(item.arguments) for item in calls], **({'reply': result.output_text} if name.startswith(('quality_', 'objection_', 'knowledge_', 'sales_', 'price_', 'product_identity_', 'scope_', 'zendesk_', 'service_', 'purchase_', 'ticket_')) else {})}),flush=True)
             return passed
         results = await asyncio.gather(*(check(case) for case in cases))
     print(json.dumps({'passed':sum(results),'total':len(results),'reasoning':options.get('reasoning','provider_default'),

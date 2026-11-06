@@ -53,7 +53,7 @@ class RecoveryContracts(OfflineRecoveryCase):
         self.assertEqual({tool.info.name for tool in agent.tools}, {
             'confirm_contact', 'get_cart_context', 'get_offer', 'send_checkout_link', 'send_help_article',
             'get_order_status', 'stop_contact', 'log_outcome', 'end_call', 'search_products', 'prepare_checkout',
-            'get_product_details', 'get_shop_policies',
+            'get_product_details', 'get_shop_policies', 'create_followup_ticket',
         })
         for tool in agent.tools:
             schema = llm.utils.function_arguments_to_pydantic_model(tool).model_json_schema()
@@ -63,6 +63,14 @@ class RecoveryContracts(OfflineRecoveryCase):
                 self.assertEqual(schema['properties']['use_discount']['type'], 'boolean')
             if tool.info.name == 'get_offer':
                 self.assertIn('discount_id', schema['properties'])
+            if tool.info.name == 'create_followup_ticket':
+                self.assertEqual(schema['properties']['callback_requested']['default'], False)
+                self.assertEqual(schema['properties']['reason']['enum'], ['unresolved_question', 'shop_action_required', 'technical_failure', 'human_requested'])
+                self.assertEqual(schema['properties']['summary']['maxLength'], 600)
+                with self.assertRaises(ValueError):
+                    llm.utils.function_arguments_to_pydantic_model(tool)(reason='unknown', summary='Test')
+                with self.assertRaises(ValueError):
+                    llm.utils.function_arguments_to_pydantic_model(tool)(reason='human_requested', summary='x' * 601)
         agent.tool = AsyncMock(return_value='{"confirmed":true}')
         await agent.get_offer(None, discount_id='approved-catalogue-id')
         agent.tool.assert_awaited_once_with('offer', {'percent': 0, 'discountId': 'approved-catalogue-id'})
@@ -70,6 +78,27 @@ class RecoveryContracts(OfflineRecoveryCase):
         model = openai.realtime.GPTLiveModel(api_key='test-only-not-a-real-key', model='gpt-live-1', voice='flitz',
             responses_options={'model': 'gpt-5.6-luna', 'instructions': module.BACKEND_INSTRUCTIONS, 'parallel_tool_calls': False})
         self.assertIsNotNone(model)
+
+    async def test_purchase_and_payment_boundary_applies_to_voice_reasoning_and_demo(self):
+        import recovery
+        for demo in (False, True):
+            for persona in ('assistant', 'founder'):
+                for language in ('de', 'en'):
+                    with self.subTest(demo=demo, persona=persona, language=language):
+                        initial = {'brand':'Synthetic Shop', 'brandVoice':'Friendly', 'agentProfile':{
+                            'name':'Lea', 'persona':persona, 'voice':'female', 'language':language,
+                            'greeting':'Hello, this is Lea, the digital assistant.'}}
+                        agent = recovery.RecoveryAgent('synthetic', initial, None, demo=demo)
+                        for prompt in (agent.instructions, recovery.backend_options(demo=demo, persona=persona)['instructions']):
+                            self.assertIn('Du legst niemals eine Bestellung an', prompt)
+                            self.assertIn('Biete niemals von dir aus einen Mitarbeiter-Rückruf an', prompt)
+                            self.assertIn('auch nicht auf ausdrücklichen Wunsch', prompt)
+                            self.assertIn('mit Vollmacht, gespeicherter Zahlungsart oder bei einer kostenlosen Bestellung', prompt)
+                            self.assertIn('verwende oder wiederhole auch freiwillig genannte Zahlungsdaten nicht', prompt)
+                        descriptions = {tool.info.name:tool.info.description for tool in agent.tools}
+                        self.assertIn('Keine Bestellung oder Zahlung', descriptions['prepare_checkout'])
+                        self.assertIn('Die Person muss die Bestellung und Zahlung selbst', descriptions['send_checkout_link'])
+                        self.assertIn('Erstellt, bezahlt oder verändert keine Bestellung', descriptions['get_order_status'])
 
     async def test_alternative_cart_tools_preserve_selected_variants_and_default_no_discount(self):
         import recovery
@@ -390,6 +419,22 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertEqual(writes[-1][1]['userEventId'], writes[1][1]['eventId'])
         self.assertFalse(writes[-1][1]['useDiscount'])
 
+    async def test_followup_ticket_is_bound_to_latest_user_without_inventing_callback_permission(self):
+        for demo in (False, True):
+            agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None, demo=demo)
+            with patch.object(self.module, 'backend_tool', new=AsyncMock(return_value='{"recorded":true}')) as backend:
+                await agent.record_message(llm.ChatMessage(role='user',content=['Ich möchte mit einem Mitarbeiter sprechen.']))
+                await agent.create_followup_ticket(None, 'human_requested', 'Menschliche Hilfe gewünscht.')
+                self.assertEqual(backend.await_args.args[2:4], ('followup_ticket', {
+                    'reason':'human_requested', 'summary':'Menschliche Hilfe gewünscht.',
+                    'callbackRequested':False, 'userEventId':agent.latest_user_event}))
+                self.assertEqual(backend.await_args.kwargs, {'demo':demo})
+                await agent.record_message(llm.ChatMessage(role='user',content=['Bitte ruft mich dafür zurück.']))
+                await agent.create_followup_ticket(None, 'human_requested', 'Rückruf ausdrücklich gewünscht.', True)
+                self.assertTrue(backend.await_args.args[3]['callbackRequested'])
+                self.assertEqual(backend.await_args.args[3]['userEventId'], agent.latest_user_event)
+                self.assertNotIn('phone', backend.await_args.args[3])
+
     async def test_contact_confirmation_returns_cart_in_one_model_tool_call(self):
         agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
         cart = '{"contactConfirmed":true,"cart":{"items":[]}}'
@@ -437,7 +482,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
         self.assertEqual([payload for name,payload in http.payloads if name=='latency'],[])
 
     async def test_new_user_turn_or_interrupted_response_invalidates_pending_action(self):
-        for tool, interrupted in [(tool, interrupted) for tool in ('send_link', 'send_help_article') for interrupted in (False, True)]:
+        for tool, interrupted in [(tool, interrupted) for tool in ('send_link', 'send_help_article', 'followup_ticket') for interrupted in (False, True)]:
             with self.subTest(tool=tool, interrupted=interrupted):
                 agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
                 agent.latest_user_event = 'old-user-event'
@@ -459,6 +504,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
             with self.assertRaisesRegex(RuntimeError,'transcript_not_persisted'):
                 await agent.record_message(llm.ChatMessage(role='user',content=['Ja, gerne.']))
             self.assertEqual(json.loads(await agent.tool('send_link'))['error'],'conversation_evidence_required')
+            self.assertEqual(json.loads(await agent.tool('followup_ticket'))['error'],'conversation_evidence_required')
             await agent.stop_contact(None)
             self.assertEqual([call.args[2] for call in backend.await_args_list],['transcript','stop'])
 

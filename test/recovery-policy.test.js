@@ -87,6 +87,17 @@ test('call windows honor contact timezone and daylight saving time', () => {
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-01T12:00:00Z')), false);
 });
 
+test('campaign start excludes the old backlog but accepts newly updated checkouts',()=>{
+    const c=context();c.shop.campaign_started_at='2026-11-02T10:00:00Z';
+    assert.equal(p.eligibility(c,NOW),'before_campaign_start');
+    assert.equal(p.eligibility(c,NOW,'action'),'before_campaign_start');
+    assert.equal(p.eligibility(c,NOW,'call',true),null);
+    c.checkout.source_updated_at=c.shop.campaign_started_at;
+    assert.equal(p.eligibility(c,NOW),null);
+    c.contact.evidence=null;
+    assert.equal(p.eligibility(c,NOW),'consent_missing');
+});
+
 test('trusted owner tests bypass timing gates but preserve customer cooldowns and attempt limits', () => {
     const fresh=context(); fresh.checkout.source_updated_at=NOW;
     assert.equal(p.eligibility(fresh,NOW),'abandonment_delay');

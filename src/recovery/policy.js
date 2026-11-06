@@ -79,6 +79,7 @@ function eligibility({ shop, checkout, contact, attempts = [], active = false },
     if (!checkout.phone || checkout.phone !== contact.phone) return 'consent_phone_mismatch';
     if (!contact.consent_checkout_id || contact.consent_checkout_id !== checkout.id) return 'consent_checkout_mismatch';
     if (!['EUR','USD'].includes(checkout.currency) || checkout.currency !== (shop.currency || 'EUR')) return 'unsupported_currency';
+    if (ownerTest!==true && shop.campaign_started_at && new Date(checkout.source_updated_at)<new Date(shop.campaign_started_at)) return 'before_campaign_start';
     if (ownerTest!==true && new Date(checkout.source_updated_at) > new Date(now - p.delayMinutes * 60000)) return 'abandonment_delay';
     if (new Date(checkout.source_updated_at) < new Date(now - p.expiryDays * 86400000)) return 'checkout_expired';
     if (checkout.arm === 'control' || contact.arm === 'control') return 'control_group';

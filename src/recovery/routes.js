@@ -92,6 +92,8 @@ function merchantRouter() {
     router.get('/', handle(async (req, res) => res.json(await service.dashboard(req.customer.id))));
     router.get('/summary', handle(async (req, res) => res.json(await service.dailySummary(req.customer.id))));
     router.get('/settings', handle(async (req, res) => res.json(await require('./discounts').settings(req.customer.id))));
+    router.get('/tickets', handle(async (req,res)=>res.json(await require('./followup-tickets').list(req.customer.id,Number(req.get('x-user-id'))))));
+    router.post('/tickets/:ticketId/resolve', handle(async (req,res)=>res.json(await require('./followup-tickets').resolve(req.customer.id,Number(req.get('x-user-id')),req.params.ticketId))));
     router.get('/terms', handle(async (req,res)=>res.json(await require('./terms').status(req.customer.id))));
     router.post('/terms', handle(async (req,res)=>res.json(await require('./terms').accept(req.customer.id,req.get('x-user-id'),req.body))));
     router.post('/shops/:shopId/agent-profile', handle(async (req, res) => res.json(await service.updateAgentProfile(req.customer.id, req.params.shopId, req.body, req.get('x-user-id')))));
@@ -139,6 +141,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'offer': result = await service.getOffer(call, req.body.percent, req.body.discountId); break;
     case 'send_link': result = await service.sendLink(call, req.body.useDiscount, req.body.userEventId, req.body.preparedCheckoutId); break;
     case 'send_help_article': result = await service.sendHelpArticle(call, req.body.variantId, req.body.articleId, req.body.userEventId); break;
+    case 'followup_ticket': result = await require('./followup-tickets').create(call,req.body); break;
     case 'transcript': result = await service.recordTranscript(call, req.body); break;
     case 'stop': result = await service.stopContact(call.customer_id, call.shop_id, call.checkout_id, 'agent_stop', call.id); break;
     case 'outcome': result = await service.outcome(call, req.body); break;
@@ -154,7 +157,7 @@ toolsRouter.use(internal, handle(async (req, res) => {
     case 'latency':
         if (!['response_latency', 'playout_latency', 'tool_result_to_speech_latency'].includes(req.body.kind) || !Number.isInteger(req.body.ms) || req.body.ms < 0 || req.body.ms > 120000) throw policy.problem('invalid_latency');
         if (req.body.kind === 'tool_result_to_speech_latency' &&
-            !['context','offer','send_link','send_help_article','order_status','search_products','product_details','shop_policies','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
+            !['context','offer','send_link','send_help_article','followup_ticket','order_status','search_products','product_details','shop_policies','prepare_checkout'].includes(req.body.tool)) throw policy.problem('invalid_latency');
         await event(db, call.shop_id, req.body.kind, { source: 'livekit_playout',
             ...(req.body.kind === 'tool_result_to_speech_latency' ? { tool: req.body.tool } : {}) }, call.id, req.body.ms);
         result = { recorded: true };

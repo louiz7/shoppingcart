@@ -6,16 +6,17 @@ const { reconcileStops } = require('./webhooks');
 
 async function tick() {
     await reconcileStops();
-    const { rows: shops } = await db.query(`SELECT id,customer_id FROM recovery_shops WHERE enabled AND approved_at IS NOT NULL AND mode='live'`);
+    const { rows: shops } = await db.query(`SELECT id,customer_id,campaign_started_at FROM recovery_shops WHERE enabled AND approved_at IS NOT NULL AND mode='live'`);
     for (const shop of shops) {
         try {
             await service.syncShop(shop.customer_id, shop.id);
             const { rows } = await db.query(`SELECT c.id FROM recovery_checkouts c JOIN recovery_contacts p
                 ON p.shop_id=c.shop_id AND p.contact_key=c.contact_key
                 WHERE c.shop_id=$1 AND c.status='pending' AND c.completed_at IS NULL
+                AND ($2::timestamptz IS NULL OR c.source_updated_at >= $2)
                 AND p.consented_at IS NOT NULL AND p.expires_at>NOW() AND p.stopped_at IS NULL
                 AND p.revoked_at IS NULL AND p.consent_checkout_id=c.id AND p.arm IS DISTINCT FROM 'control'
-                ORDER BY c.last_evaluated_at NULLS FIRST,c.source_updated_at LIMIT 25`, [shop.id]);
+                ORDER BY c.last_evaluated_at NULLS FIRST,c.source_updated_at LIMIT 25`, [shop.id,shop.campaign_started_at]);
             for (const checkout of rows) {
                 try { await service.startCall(shop.customer_id, shop.id, checkout.id); }
                 catch (error) { if (!error.status) throw error; }
@@ -29,6 +30,9 @@ async function tick() {
 }
 
 async function purgeExpiredData(shopId = null) {
+    await db.query(`DELETE FROM recovery_followup_tickets t USING recovery_calls a
+        WHERE t.call_id=a.id AND t.created_at<NOW()-INTERVAL '30 days'
+        AND ($1::uuid IS NULL OR a.shop_id=$1)`, [shopId]);
     // Transcripts and customer evidence expire; suppression hashes remain until uninstall.
     await db.query(`DELETE FROM recovery_events WHERE created_at<NOW()-INTERVAL '30 days'
         AND ($1::uuid IS NULL OR shop_id=$1)`, [shopId]);

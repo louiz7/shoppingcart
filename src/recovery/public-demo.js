@@ -142,6 +142,12 @@ async function tool(token,name,input={}) {
             case 'search_products': result=await catalog.search(shop,input.query,input.maxPriceCents??null);s.known=[...new Set([...s.known,...result.products.map(i=>i.variantId)])].slice(-100);break;
             case 'product_details': if(!s.known.includes(input.variantId)) throw policy.problem('unknown_product');result=await knowledge.product(shop,input.variantId);break;
             case 'shop_policies': result=await knowledge.policies(shop);break;
+            case 'followup_ticket': {
+                const value=require('./followup-tickets').validate(input);consent(s,input.userEventId);
+                s.followupTicketId ||= randomUUID();
+                result={status:'simulated',ticketId:s.followupTicketId,callbackRequested:value.callbackRequested,simulated:true,
+                    instructions:'Nur simuliert. Kein echtes Händlerticket und kein Rückruf angelegt.'};break;
+            }
             case 'send_help_article': {
                 consent(s,input.userEventId);
                 if(!s.known.includes(input.variantId)) throw policy.problem('unknown_product');
