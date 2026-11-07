@@ -1,6 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const { parsePhoneNumberFromString, isSupportedCountry } = require('libphonenumber-js/max');
 
 const DEFAULT_RULES = Object.freeze({
     timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5], start: '10:00', end: '18:00',
@@ -43,11 +44,18 @@ function cents(value) {
     return result;
 }
 
-function phone(value) {
-    if (typeof value !== 'string') throw problem('invalid_phone');
+function phone(value, country) {
+    if (typeof value !== 'string' || value.length > 80) throw problem('invalid_phone');
     const normalized = value.trim().replace(/[\s()\-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) throw problem('invalid_phone');
-    return normalized;
+    // Preserve existing international identities used by consent and suppression records.
+    if (/^\+[1-9]\d{7,14}$/.test(normalized)) return normalized;
+    // National numbers need the country attached to that number, never the shop's country.
+    if (typeof country !== 'string' || !isSupportedCountry(country) || !/^[\d\s()+./-]+$/.test(value)) {
+        throw problem('invalid_phone');
+    }
+    const parsed = parsePhoneNumberFromString(value, { defaultCountry: country, extract: false });
+    if (!parsed || parsed.ext || !parsed.isValid()) throw problem('invalid_phone');
+    return parsed.number;
 }
 
 function contactKey(shopId, number) {

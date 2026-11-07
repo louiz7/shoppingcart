@@ -2,13 +2,13 @@
 
 const { createHmac, timingSafeEqual, randomBytes } = require('node:crypto');
 const { decryptShopifyCredentials } = require('../services/shopify-crypto');
-const { problem, cents, checkoutUrl } = require('./policy');
+const { problem, cents, checkoutUrl, phone } = require('./policy');
 
 const VERSION = '2026-10';
 const SCOPES = ['read_orders', 'read_products', 'read_customers', 'write_discounts'];
 const FIELDS = `id name abandonedCheckoutUrl completedAt createdAt updatedAt discountCodes
     customer { id firstName phone email }
-    shippingAddress { phone }
+    shippingAddress { phone countryCodeV2 }
     subtotalPriceSet { presentmentMoney { amount currencyCode } }
     lineItems(first:20) { pageInfo { hasNextPage } nodes {
       title variantTitle quantity originalUnitPriceSet { presentmentMoney { amount currencyCode } }
@@ -230,9 +230,14 @@ function normalizeCheckout(node, shop) {
             (item.variant.inventoryPolicy === 'CONTINUE' ||
                 item.variant.sellableOnlineQuantity >= requiredQuantity.get(item.variant.id))),
     }));
+    let number = null;
+    try {
+        number = phone(node.shippingAddress?.phone || node.customer?.phone,
+            node.shippingAddress?.phone ? node.shippingAddress.countryCodeV2 : undefined);
+    } catch { /* Missing or ambiguous numbers stay ineligible. */ }
     return {
         id: node.id, updatedAt: node.updatedAt, completedAt: node.completedAt,
-        phone: node.shippingAddress?.phone || node.customer?.phone || null,
+        phone: number,
         email: node.customer?.email || null, customerId: node.customer?.id || null,
         firstName: String(node.customer?.firstName || '').slice(0, 80), currency: money.currencyCode,
         subtotalCents: cents(money.amount), checkoutUrl: checkoutUrl(node.abandonedCheckoutUrl, shop),

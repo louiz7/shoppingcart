@@ -43,6 +43,12 @@ test('Shopify checkout normalization accepts USD and rejects mixed or unsupporte
                 inventoryPolicy: 'CONTINUE', sellableOnlineQuantity: 0 } }] },
     };
     const shop = { domain: 'usd-test.myshopify.com', currency: 'USD' };
+    node.shippingAddress={phone:'0176 12345678',countryCodeV2:'DE'};
+    assert.equal(normalizeCheckout(node,shop).phone,'+4917612345678');
+    node.shippingAddress={countryCodeV2:'DE'};node.customer={phone:'0176 12345678'};
+    assert.equal(normalizeCheckout(node,shop).phone,null); // Shipping country does not identify a profile number's country.
+    node.customer={phone:'+4917612345678'};
+    assert.equal(normalizeCheckout(node,shop).phone,'+4917612345678');
     const cart = normalizeCheckout(node, shop);
     assert.equal(cart.currency, 'USD'); assert.equal(cart.subtotalCents, 11800);
     assert.throws(() => normalizeCheckout(node, { ...shop, currency: 'EUR' }), /unsupported_currency/);
@@ -91,11 +97,29 @@ test('zero checkout delay permits immediate evaluation while preserving stop and
     for (const delayMinutes of [-1,0.5,1441]) assert.throws(()=>p.rules({delayMinutes}),/invalid_delayMinutes/);
 });
 
+test('national phone normalization requires its own country and preserves international contact keys', () => {
+    for (const raw of ['0176 12345678', '0176/12345678', '(0176) 12345678', '0049 176 12345678']) {
+        const number=p.phone(raw,'DE');
+        assert.equal(number,'+4917612345678');
+        assert.equal(p.contactKey('shop',number),p.contactKey('shop','+49 (176) 12345678'));
+    }
+    assert.equal(p.phone('0664 1234567','AT'),'+436641234567');
+    assert.equal(p.phone('06 6982','IT'),'+39066982');
+    for (const [raw,country] of [['017612345678',undefined],['017612345678','ZZ'],['112','DE'],
+        ['017612345678 ext 99','DE'],['call 017612345678','DE'],['0'.repeat(100),'DE']]) {
+        assert.throws(()=>p.phone(raw,country),/invalid_phone/);
+    }
+});
+
 test('call windows honor contact timezone and daylight saving time', () => {
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-07-06T08:00:00Z')), true);
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-02T08:00:00Z')), false);
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-02T17:00:00Z')), false);
     assert.equal(p.inWindow(p.rules(), 'Europe/Berlin', new Date('2026-11-01T12:00:00Z')), false);
+    const saturday=p.rules({weekdays:[1,2,3,4,5,6]});
+    assert.equal(p.inWindow(saturday,'Europe/Berlin',new Date('2026-11-07T12:00:00Z')),true);
+    assert.equal(p.inWindow(saturday,'Europe/Berlin',new Date('2026-11-07T19:00:00Z')),false);
+    assert.equal(p.inWindow(saturday,'Europe/Berlin',new Date('2026-11-08T12:00:00Z')),false);
 });
 
 test('campaign start excludes the old backlog but accepts newly updated checkouts',()=>{

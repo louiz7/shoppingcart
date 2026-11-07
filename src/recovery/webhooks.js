@@ -53,7 +53,10 @@ async function ingestShopify(shop, topic, payload, eventId) {
             const net = policy.cents(payload.current_subtotal_price ?? payload.subtotal_price ?? '0');
             const paid = ['paid', 'partially_refunded'].includes(payload.financial_status) && !payload.cancelled_at;
             let orderPhone = null;
-            try { orderPhone = policy.phone(payload.phone || payload.shipping_address?.phone || payload.customer?.phone); } catch { /* Unknown identities cannot be attributed. */ }
+            try {
+                const raw = payload.phone || payload.shipping_address?.phone || payload.customer?.phone;
+                orderPhone = policy.phone(raw, raw === payload.shipping_address?.phone ? payload.shipping_address?.country_code : undefined);
+            } catch { /* Unknown identities cannot be attributed. */ }
             await client.query(`INSERT INTO recovery_orders(shop_id,external_id,checkout_token,checkout_external_id,phone,currency,paid,net_cents,source_updated_at,ordered_at,contact_key,paid_at,is_test)
                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$14) ON CONFLICT(shop_id,external_id) DO UPDATE SET
                 is_test=recovery_orders.is_test OR EXCLUDED.is_test,

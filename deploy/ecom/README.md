@@ -67,3 +67,14 @@ inspection; ambiguous sends are never automatically retried. Interrupted sends
 become `unknown` after two minutes. This prioritizes avoiding duplicate alerts over
 guaranteed delivery during provider failures. Disabling alerts stops new polls;
 a send already in progress can finish. Calls and customer SMS run independently.
+
+### Checkout phone normalization
+
+National shipping phone numbers are normalized using Shopify's shipping-address
+`countryCodeV2` and libphonenumber metadata. Existing international contact keys are
+preserved so suppression and attempt limits still apply. National customer-profile
+numbers without their own country remain ineligible; the shop country is not guessed.
+Order webhooks apply the same normalization to a matching shipping phone. Polling
+reimports previously rejected national numbers without changing campaign start.
+Deskspace's operator-approved call window is Monday–Saturday, 10:00–18:00 Berlin;
+other shop schedules are not changed by this fix.

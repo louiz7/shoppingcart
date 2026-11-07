@@ -455,6 +455,29 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.ok(hangup.mock.calls.length > 0);
     });
 
+    await t.test('national checkout numbers reuse the international blocklist and paid-order identity', async () => {
+        const f=await fixture(),number='+4917612345678';
+        const snapshot={...f.snapshot,phone:number};
+        await transaction(client=>s.upsertCheckout(client,f.shop,snapshot));
+        await s.stopContact(f.customerId,f.shopId,f.checkoutId);
+        const normalized=shopify.normalizeCheckout({id:'gid://shopify/AbandonedCheckout/98765',
+            updatedAt:snapshot.updatedAt,completedAt:null,abandonedCheckoutUrl:snapshot.checkoutUrl,
+            shippingAddress:{phone:'0176 12345678',countryCodeV2:'DE'},
+            subtotalPriceSet:{presentmentMoney:{amount:'118.00',currencyCode:'EUR'}},
+            lineItems:{nodes:[{title:'Synthetic',quantity:1,
+                originalUnitPriceSet:{presentmentMoney:{amount:'118.00',currencyCode:'EUR'}}}]},
+        },f.shop);
+        await transaction(client=>s.upsertCheckout(client,f.shop,normalized));
+        const imported=(await db.query('SELECT contact_key,status,phone FROM recovery_checkouts WHERE shop_id=$1 AND external_id=$2',[f.shopId,normalized.id])).rows[0];
+        assert.deepEqual(imported,{contact_key:p.contactKey(f.shopId,number),status:'stopped',phone:number});
+        const other=await fixture();
+        await transaction(client=>s.upsertCheckout(client,other.shop,{...other.snapshot,phone:number}));
+        await hooks.ingestShopify(other.shop,'orders/paid',{id:98765,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),
+            shipping_address:{phone:'0176 12345678',country_code:'DE'},financial_status:'paid',subtotal_price:'118.00',currency:'EUR'},randomUUID());
+        assert.equal((await db.query('SELECT phone FROM recovery_orders WHERE shop_id=$1',[other.shopId])).rows[0].phone,number);
+        assert.equal((await db.query('SELECT status FROM recovery_checkouts WHERE id=$1',[other.checkoutId])).rows[0].status,'converted');
+    });
+
     await t.test('blocklist survives new carts, phone formatting, imports and retention without crossing shops', async () => {
         const f = await fixture(); await activate(f); const call = await fakeCall(f);
         const pending = randomUUID();
