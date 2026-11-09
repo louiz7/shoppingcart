@@ -96,15 +96,15 @@ test('merchant daily summary counts evidenced outbound calls and checkout-linked
         await assert.rejects(hooks.ingestShopify(s, 'orders/paid', { ...payload, id: 'invalid-test-order', test: 'true' }, randomUUID()), /invalid_order/);
     });
 
-    await t.test('answered mailboxes do not turn later purchases into recovered orders', async () => {
+    for (const outcome of ['voicemail','technical_failure']) await t.test(`${outcome} does not turn later purchases into recovered orders`, async () => {
         const s=await shop(await tenant()),c=await checkout(s);
         const a=await call(s,c,'2026-11-02T08:00:00Z','2026-11-02T08:01:00Z');
         await order(s,c,'2026-11-02T09:00:00Z');
         assert.equal((await service.dailySummary(s.customer_id,asOf)).shops[0].confirmedCheckoutsToday,1);
-        await service.endUnreached(a,'voicemail');
+        await service.endUnreached(a,outcome);
         const summary=(await service.dailySummary(s.customer_id,asOf)).shops[0];
         assert.equal(summary.confirmedCheckoutsToday,0);assert.equal(summary.callsToday,1);
-        assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[a.id])).rows[0].outcome,'voicemail');
+        assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[a.id])).rows[0].outcome,outcome);
     });
 
     await t.test('tenant, simulation, original checkout and actual payment evidence are required', async () => {

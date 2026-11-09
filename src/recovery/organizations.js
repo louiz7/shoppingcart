@@ -97,11 +97,11 @@ async function overview(customerId,userId) {
         (SELECT COALESCE(sum(o.net_cents),0)::float8 FROM recovery_orders o WHERE o.shop_id=s.id AND o.paid AND NOT o.is_test
             AND o.currency=s.currency AND EXISTS(SELECT 1 FROM recovery_checkouts checkout JOIN recovery_calls a ON a.checkout_id=checkout.id
                 AND a.shop_id=checkout.shop_id WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test
-                AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
+                AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND a.outcome IS DISTINCT FROM 'technical_failure' AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                 AND (o.recovery_checkout_id=checkout.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id))) AS revenue,
         (SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=s.id AND o.paid AND NOT o.is_test AND o.currency=s.currency
             AND EXISTS(SELECT 1 FROM recovery_checkouts checkout JOIN recovery_calls a ON a.checkout_id=checkout.id AND a.shop_id=checkout.shop_id
-                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer'
+                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND a.outcome IS DISTINCT FROM 'technical_failure'
                 AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                 AND (o.recovery_checkout_id=checkout.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id))) AS orders
         ,(SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=s.id AND o.paid AND NOT o.is_test

@@ -293,7 +293,7 @@ async function callContext(token, cleanup = false) {
     const { rows } = await db.query(`SELECT a.*,s.customer_id FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
         JOIN customers c ON c.id=s.customer_id WHERE a.token_hash=$1 AND
         ((a.expires_at>NOW() AND a.status IN ('reserved','dialing','connected') AND c.is_active
-            AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer')
+            AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND a.outcome IS DISTINCT FROM 'technical_failure')
         OR ($2::boolean AND s.mode='live' AND a.status!='simulated'))`, [hash(token), cleanup]);
     if (!rows[0]) throw policy.problem('invalid_call_token', 401);
     return rows[0];
@@ -322,17 +322,17 @@ async function endCall(call) {
 }
 
 async function endUnreached(call, outcome) {
-    if (!['voicemail','no_answer'].includes(outcome)) throw policy.problem('invalid_unreached_outcome');
+    if (!['voicemail','no_answer','technical_failure'].includes(outcome)) throw policy.problem('invalid_unreached_outcome');
     await transaction(async client => {
         await client.query('SELECT id FROM recovery_shops WHERE id=$1 AND customer_id=$2 FOR UPDATE',[call.shop_id,call.customer_id]);
         const { rows:[actual] }=await client.query(`SELECT a.* FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
             WHERE a.id=$1 AND a.shop_id=$2 AND a.checkout_id=$3 AND s.customer_id=$4
             AND s.mode='live' AND a.status!='simulated' FOR UPDATE OF a`,[call.id,call.shop_id,call.checkout_id,call.customer_id]);
         if (!actual || actual.room!==`recovery-${actual.id}`) throw policy.problem('invalid_call_token',401);
-        if ((actual.ended_at && actual.outcome) || ['voicemail','no_answer'].includes(actual.outcome)) return;
+        if ((actual.ended_at && actual.outcome) || ['voicemail','no_answer','technical_failure'].includes(actual.outcome)) return;
         // Persist the terminal intent before the provider request; never pretend a failed hangup succeeded.
         await client.query(`UPDATE recovery_calls SET outcome=$2,summary=$3,status=CASE WHEN ended_at IS NULL THEN 'unknown' ELSE status END WHERE id=$1`,
-        [actual.id,outcome,outcome==='voicemail' ? 'Mailbox erkannt; keine Nachricht hinterlassen.' : 'Kein persönliches Gespräch zustande gekommen; Anruf beendet.']);
+        [actual.id,outcome,outcome==='technical_failure' ? 'Technischer Fehler beim Sprachdienst oder Anrufaufbau; Anruf beendet.' : outcome==='voicemail' ? 'Mailbox erkannt; keine Nachricht hinterlassen.' : 'Kein persönliches Gespräch zustande gekommen; Anruf beendet.']);
         await event(client,actual.shop_id,'unreached_hangup_requested',{outcome},actual.id);
     });
     return endCall(call);
@@ -389,7 +389,7 @@ async function dailySummary(customerId, asOf = new Date(), shopId = null) {
         (SELECT count(*)::int FROM recovery_orders o WHERE o.shop_id=d.id AND o.paid AND NOT o.is_test AND o.currency=d.currency
             AND o.paid_at>=d.starts_at AND o.paid_at<d.ends_at AND EXISTS (
                 SELECT 1 FROM recovery_checkouts checkout JOIN recovery_calls a ON a.checkout_id=checkout.id AND a.shop_id=checkout.shop_id
-                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer'
+                WHERE checkout.shop_id=o.shop_id AND a.status!='simulated' AND NOT a.is_test AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND a.outcome IS DISTINCT FROM 'technical_failure'
                     AND o.paid_at>a.connected_at AND o.paid_at<a.connected_at+INTERVAL '168 hours'
                     AND (o.recovery_checkout_id=checkout.id OR (o.checkout_token IS NOT NULL AND o.checkout_token=checkout.checkout_token) OR o.checkout_external_id=checkout.external_id)
             )) AS "confirmedCheckoutsToday"
@@ -628,7 +628,7 @@ async function outcome(call, input) {
         typeof input.summary !== 'string' || input.summary.length > 1000) throw policy.problem('invalid_outcome');
     if (input.outcome==='voicemail') return endUnreached(call,'voicemail');
     if (['refused', 'wrong_person'].includes(input.outcome)) await stopContact(call.customer_id, call.shop_id, call.checkout_id, input.outcome, call.id);
-    await db.query(`UPDATE recovery_calls SET outcome=$2,summary=$3 WHERE id=$1`, [call.id, input.outcome, input.summary]);
+    await db.query(`UPDATE recovery_calls SET outcome=$2,summary=$3 WHERE id=$1 AND outcome IS DISTINCT FROM 'technical_failure' AND outcome IS DISTINCT FROM 'voicemail' AND outcome IS DISTINCT FROM 'no_answer'`, [call.id, input.outcome, input.summary]);
     return { recorded: true, purchaseConfirmed: false };
 }
 

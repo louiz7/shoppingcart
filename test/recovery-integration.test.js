@@ -314,6 +314,18 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM recovery_events WHERE call_id=$1 AND kind='unreached_hangup_requested'",[call.id])).rows[0].n,1);
     });
 
+    await t.test('technical failures are terminal, tenant scoped and cannot be overwritten by late results',async()=>{
+        const f=await fixture(),other=await fixture(); await activate(f); const call=await fakeCall(f);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
+        await assert.rejects(s.endUnreached({...call,customer_id:other.customerId},'technical_failure'),{code:'invalid_call_token'});
+        await s.endUnreached(call,'technical_failure');
+        await s.endUnreached(call,'no_answer');
+        await s.outcome(call,{outcome:'human_needed',summary:'Late provider event'});
+        const saved=(await db.query('SELECT outcome,status FROM recovery_calls WHERE id=$1',[call.id])).rows[0];
+        assert.deepEqual(saved,{outcome:'technical_failure',status:'ended'});
+        assert.equal((await db.query('SELECT stopped_at FROM recovery_contacts WHERE shop_id=$1',[f.shopId])).rows[0].stopped_at,null);
+    });
+
     await t.test('failed cleanup stays unconfirmed and only an exact SDK missing-room response counts as absence',async () => {
         const { TwirpError }=require('livekit-server-sdk');
         const f=await fixture(); await activate(f); const call=await fakeCall(f);

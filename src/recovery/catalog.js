@@ -75,7 +75,7 @@ async function authorized(call, client = db, lock = false, conversationRequired 
     const result = await client.query(`SELECT 1 FROM recovery_calls WHERE id=$1 AND shop_id=$2 AND checkout_id=$3
         AND contact_key=$4 AND (NOT $5 OR identity_verified) AND expires_at>NOW() AND ended_at IS NULL
         AND status IN ('reserved','dialing','connected') AND outcome IS DISTINCT FROM 'voicemail'
-        AND outcome IS DISTINCT FROM 'no_answer'`,[call.id,shop.id,call.checkout_id,ctx.checkout.contact_key,conversationRequired]);
+        AND outcome IS DISTINCT FROM 'no_answer' AND outcome IS DISTINCT FROM 'technical_failure'`,[call.id,shop.id,call.checkout_id,ctx.checkout.contact_key,conversationRequired]);
     if (!result.rowCount) throw policy.problem('call_authorization_changed',409);
     return ctx;
 }
@@ -187,7 +187,7 @@ async function attributeOrder(client, shop, payload, phone) {
         JOIN recovery_checkouts c ON c.id=a.checkout_id AND c.shop_id=e.shop_id
         JOIN recovery_actions sms ON sms.checkout_id=c.id AND sms.kind='sms' AND sms.data->>'proposalId'=e.id::text
         WHERE e.id=$1 AND e.shop_id=$2 AND e.kind='checkout_prepared' AND c.phone=$3 AND c.currency=$4
-        AND sms.status IN ('accepted','delivered') AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer'
+        AND sms.status IN ('accepted','delivered') AND a.connected_at IS NOT NULL AND a.outcome IS DISTINCT FROM 'voicemail' AND a.outcome IS DISTINCT FROM 'no_answer' AND a.outcome IS DISTINCT FROM 'technical_failure'
         AND $5::timestamptz>=sms.created_at AND $5::timestamptz<a.connected_at+INTERVAL '7 days'`,
     [attrs[0].value,shop.id,phone,payload.currency,payload.created_at]);
     const row = result.rows[0];

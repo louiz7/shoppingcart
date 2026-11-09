@@ -42,7 +42,7 @@ async function attributeOrder(client,shop,payload) {
         JOIN recovery_checkouts c ON c.id=sms.checkout_id AND c.id=call.checkout_id AND c.shop_id=call.shop_id
         JOIN recovery_orders target ON target.shop_id=c.shop_id AND target.external_id=$2
         WHERE c.shop_id=$1 AND target.paid AND NOT target.is_test AND target.currency=c.currency
-        AND NOT call.is_test AND call.status!='simulated' AND call.connected_at IS NOT NULL AND call.outcome IS DISTINCT FROM 'voicemail' AND call.outcome IS DISTINCT FROM 'no_answer'
+        AND NOT call.is_test AND call.status!='simulated' AND call.connected_at IS NOT NULL AND call.outcome IS DISTINCT FROM 'voicemail' AND call.outcome IS DISTINCT FROM 'no_answer' AND call.outcome IS DISTINCT FROM 'technical_failure'
         AND sms.status IN ('accepted','delivered') AND sms.kind='sms' AND l.first_opened_at>=sms.created_at
         AND target.ordered_at>l.first_opened_at AND target.paid_at>l.first_opened_at
         AND target.paid_at<call.connected_at+INTERVAL '7 days'

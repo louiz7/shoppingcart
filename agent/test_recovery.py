@@ -8,7 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 from livekit.agents import AgentServer, llm
 from livekit.plugins import openai
@@ -35,6 +35,37 @@ class OfflineRecoveryCase(unittest.IsolatedAsyncioTestCase):
 
 
 class RecoveryContracts(OfflineRecoveryCase):
+    async def test_large_unicode_catalog_is_packed_without_truncating_rules_or_facts(self):
+        import recovery
+        initial = {'brand': 'Synthetic shop', 'brandVoice': 'Friendly', 'cart': {
+            'currency': 'EUR', 'subtotalCents': 12300, 'items': [
+                {'title': 'Tisch', 'variantTitle': 'Weiß', 'variantId': f'gid://shopify/ProductVariant/{i}',
+                 'quantity': 1, 'description': '🪑材料' * 5000} for i in range(20)]},
+            'knowledge': {'products': [{'variantId': 'gid://shopify/ProductVariant/0',
+                'description': 'MASSIVE_SOURCE_MUST_NOT_BE_PARTIALLY_QUOTED' * 10000,
+                'attributes': [{'label':'Maße', 'value':'120 × 80 cm'}] * 1000}]},
+            'agentProfile': {'name':'Lea','persona':'assistant','voice':'female','language':'de','greeting':'Hallo'}}
+        original = json.dumps(initial)
+        for persona in ('assistant', 'founder'):
+            initial['agentProfile']['persona'] = persona
+            for demo in (False, True):
+                agent = recovery.RecoveryAgent('synthetic', initial, None, demo=demo)
+                self.assertLessEqual(len(agent.instructions.encode()), recovery.MAX_VOICE_INSTRUCTION_BYTES)
+                self.assertIn('Du legst niemals eine Bestellung an', agent.instructions)
+                self.assertIn('keine vollständige Prüfung', agent.instructions)
+                self.assertIn('Tisch', agent.instructions)
+                self.assertNotIn('MASSIVE_SOURCE', agent.instructions)
+        packed = recovery.startup_context(initial)
+        self.assertLessEqual(len(packed.encode()), 8000)
+        payload = json.loads(packed.split('\n')[-1])
+        self.assertEqual(payload['cart']['totalLineItems'], 20)
+        self.assertEqual(payload['cart']['subtotalCents'], 12300)
+        self.assertTrue(all('description' not in i for i in payload['cart']['items']))
+        initial['agentProfile']['persona'] = 'assistant'
+        self.assertEqual(json.dumps(initial), original)
+        with self.assertRaisesRegex(ValueError, 'recovery_prompt_budget_exceeded'):
+            recovery.RecoveryAgent('synthetic', {**initial, 'brandVoice': 'x' * 20000}, None)
+
     async def test_named_dispatch_and_all_tools_have_valid_sdk_schemas(self):
         registered = []
         original = AgentServer.rtc_session
@@ -131,6 +162,11 @@ class WorkerLifecycle(OfflineRecoveryCase):
         spec = importlib.util.spec_from_file_location('recovery_lifecycle_test', AGENT_PATH)
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
+        self.model_session = SimpleNamespace(session_id='synthetic-accepted-session')
+        readiness = patch.object(self.module.RecoveryAgent, 'duplex_session', new_callable=PropertyMock,
+                                 return_value=self.model_session)
+        readiness.start()
+        self.addCleanup(readiness.stop)
         detector = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(category='human', reason='llm')))
         amd = Mock(return_value=SimpleNamespace())
         amd.return_value = AsyncMock()
@@ -337,6 +373,41 @@ class WorkerLifecycle(OfflineRecoveryCase):
         await self.run_fixture(ctx, http, session)
         self.assertEqual(session.greeting_calls, 0)
         self.assertEqual(http.requests.count('not_reached'), 1)
+        self.assertEqual(next(p['outcome'] for n,p in http.payloads if n=='not_reached'), 'technical_failure')
+
+    async def test_model_rejection_never_signals_readiness_or_waits_for_customer(self):
+        ctx, http, session = self.fixture()
+        with patch.object(self.module, 'wait_model_ready', side_effect=TimeoutError('synthetic model rejection')):
+            with self.assertRaises(TimeoutError):
+                await self.run_fixture(ctx, http, session)
+        ctx.room.local_participant.set_attributes.assert_not_awaited()
+        ctx.wait_for_participant.assert_not_awaited()
+        self.assertEqual(next(p['outcome'] for n,p in http.payloads if n=='not_reached'), 'technical_failure')
+        self.assertEqual(session.greeting_calls, 0)
+
+    async def test_model_readiness_requires_server_acknowledgement(self):
+        agent = SimpleNamespace(duplex_session=SimpleNamespace(session_id=None))
+        closed = asyncio.Event()
+        task = asyncio.create_task(self.module.wait_model_ready(agent, closed))
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        agent.duplex_session.session_id = 'accepted'
+        await asyncio.wait_for(task, 1)
+        closed.set()
+        with self.assertRaisesRegex(RuntimeError, 'recovery_model_start_failed'):
+            await self.module.wait_model_ready(agent, closed)
+
+    async def test_model_failure_during_amd_is_not_recorded_as_no_answer(self):
+        ctx, http, session = self.fixture()
+        async def fail():
+            session.emit('close', SimpleNamespace(reason=self.module.CloseReason.ERROR))
+            raise RuntimeError('amd closed before a result was available')
+        self.detector.execute.side_effect = fail
+        with self.assertRaises(RuntimeError):
+            await self.run_fixture(ctx, http, session)
+        outcomes = [p['outcome'] for n,p in http.payloads if n=='not_reached']
+        self.assertEqual(outcomes, ['technical_failure'])
+        self.assertEqual(session.greeting_calls, 0)
 
     async def test_voicemail_tool_mutes_before_io_and_does_not_wait_for_playout(self):
         agent = self.module.RecoveryAgent('test', {'brand':'Test', 'brandVoice':'Friendly'}, None)
@@ -502,10 +573,9 @@ class WorkerLifecycle(OfflineRecoveryCase):
     async def test_fatal_voice_service_failure_records_generic_result_before_cleanup(self):
         ctx, http, session = self.fixture(finish='provider_error')
         await self.run_fixture(ctx, http, session)
-        self.assertEqual(http.requests, ['context', 'connected', 'outcome', 'end'])
-        result = next(payload for name, payload in http.payloads if name == 'outcome')
-        self.assertEqual(result['outcome'], 'human_needed')
-        self.assertNotIn('credit', result['summary'])
+        self.assertEqual(http.requests, ['context', 'connected', 'not_reached', 'end'])
+        result = next(payload for name, payload in http.payloads if name == 'not_reached')
+        self.assertEqual(result['outcome'], 'technical_failure')
         self.assertEqual(session.close_calls, 1)
         ctx.shutdown.assert_called_once()
 
