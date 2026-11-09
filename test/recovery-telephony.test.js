@@ -82,7 +82,9 @@ test('dedicated routing is selected only by the authenticated shop ID, including
     let now=1000;
     const clock=t.mock.method(Date,'now',()=>now);
     for (const participants of [[],[{kind:0,attributes:{'recovery.amd_ready':'synthetic'}}],
-        [{kind:4,attributes:{'recovery.amd_ready':'other-call'}}]]) {
+        [{kind:4,attributes:{'recovery.amd_ready':'other-call'}}],
+        [{kind:0,attributes:{recoveryAmdReady:'synthetic'}}],
+        [{kind:4,attributes:{recoveryAmdReady:'other-call'}}]]) {
         readiness.mock.mockImplementation(async()=>{now+=31000;return participants;});
         await assert.rejects(telephony.dial({shop_id:shop,room:'recovery-synthetic',id:'synthetic'},'+4900000000005','synthetic'),
             {code:'recovery_agent_not_ready'});
@@ -91,4 +93,30 @@ test('dedicated routing is selected only by the authenticated shop ID, including
     clock.mock.restore();
     assert.equal(dial.mock.calls.length,3);
 
+});
+
+test('agent readiness survives the real LiveKit SDK response transformation before SIP dialing', async t => {
+    const updates={LIVEKIT_URL:'wss://synthetic.invalid',LIVEKIT_API_KEY:'synthetic',LIVEKIT_API_SECRET:'synthetic',
+        LIVEKIT_AGENT_NAME:'synthetic',OPENAI_API_KEY:'synthetic',RECOVERY_LIVE_ENABLED:'1',
+        RECOVERY_SIP_TRUNK_ID:'ST_synthetic',RECOVERY_CALLER_ID:'+4900000000001',RECOVERY_SHOP_TELEPHONY:'{}'};
+    const before=Object.fromEntries(Object.keys(updates).map(k=>[k,process.env[k]]));Object.assign(process.env,updates);
+    t.after(()=>{for(const[k,v]of Object.entries(before)){if(v===undefined)delete process.env[k];else process.env[k]=v;}});
+    const {RoomServiceClient,AgentDispatchClient,SipClient}=require('livekit-server-sdk');
+    t.mock.method(RoomServiceClient.prototype,'createRoom',async()=>({}));
+    t.mock.method(RoomServiceClient.prototype,'deleteRoom',async()=>({}));
+    t.mock.method(AgentDispatchClient.prototype,'createDispatch',async()=>({}));
+    const dial=t.mock.method(SipClient.prototype,'createSipParticipant',async()=>({}));
+    let now=Date.now();
+    t.mock.method(Date,'now',()=>now);
+    const request=t.mock.method(global,'fetch',async(url,init)=>{
+        assert.equal(String(url),'https://synthetic.invalid/twirp/livekit.RoomService/ListParticipants');
+        assert.equal(JSON.parse(init.body).room,'recovery-synthetic');
+        now+=31000;
+        return Response.json({participants:[{identity:'agent-synthetic',kind:'AGENT',
+            attributes:{'recovery.amd_ready':'synthetic'}}]});
+    });
+    await telephony.dial({room:'recovery-synthetic',id:'synthetic'},'+4900000000002','synthetic');
+    assert.equal(request.mock.calls.length,1);
+    assert.equal(dial.mock.calls.length,1);
+    assert.equal(dial.mock.calls[0].arguments[3].participantIdentity,'buyer-synthetic');
 });

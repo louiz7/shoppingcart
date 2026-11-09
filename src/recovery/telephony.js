@@ -55,8 +55,9 @@ async function dial(call, number, token) {
         const deadline = Date.now() + 30000;
         while (true) {
             const participants = await rooms.listParticipants(call.room);
+            // The Node SDK camel-cases attribute keys; accept either SDK representation.
             if (participants.some(p => p.kind === ParticipantInfo_Kind.AGENT &&
-                p.attributes?.['recovery.amd_ready'] === call.id)) break;
+                (p.attributes?.['recovery.amd_ready'] ?? p.attributes?.recoveryAmdReady) === call.id)) break;
             if (Date.now() >= deadline) throw problem('recovery_agent_not_ready', 503);
             await delay(200);
         }
