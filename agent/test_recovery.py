@@ -35,6 +35,25 @@ class OfflineRecoveryCase(unittest.IsolatedAsyncioTestCase):
 
 
 class RecoveryContracts(OfflineRecoveryCase):
+    async def test_pinned_sdk_allows_speech_while_real_amd_remains_pending(self):
+        import recovery
+        session = recovery.AgentSession(turn_detection='manual')
+        classifier = recovery.inference.LLM('openai/gpt-4.1-mini',
+            api_key='synthetic', api_secret='synthetic-offline-secret-at-least-32-bytes')
+        try:
+            await session.start(agent=recovery.Agent(instructions='Offline contract test'), record=False)
+            # Only remote audio subscription is stubbed; AMD and activity authorization are real SDK code.
+            with patch.object(recovery.AMD, '_setup', new=AsyncMock()):
+                async with recovery.AMD(session, llm=classifier, stt=None, ivr_detection=False) as detector:
+                    self.assertTrue(detector.pending)
+                    self.assertFalse(session._activity._authorization_allowed.is_set())
+                    recovery.resume_parallel_speech(session)
+                    self.assertTrue(session._activity._authorization_allowed.is_set())
+                    self.assertTrue(detector.pending)
+        finally:
+            await session.aclose()
+            await classifier.aclose()
+
     async def test_large_unicode_catalog_is_packed_without_truncating_rules_or_facts(self):
         import recovery
         initial = {'brand': 'Synthetic shop', 'brandVoice': 'Friendly', 'cart': {
@@ -167,7 +186,7 @@ class WorkerLifecycle(OfflineRecoveryCase):
                                  return_value=self.model_session)
         readiness.start()
         self.addCleanup(readiness.stop)
-        detector = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(category='human', reason='llm')))
+        detector = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(category='human', reason='llm')), aclose=AsyncMock())
         amd = Mock(return_value=SimpleNamespace())
         amd.return_value = AsyncMock()
         amd.return_value.__aenter__.return_value = detector
@@ -256,6 +275,8 @@ class WorkerLifecycle(OfflineRecoveryCase):
             def __init__(self):
                 super().__init__()
                 self.output = SimpleNamespace(set_audio_enabled=Mock())
+                self._activity = SimpleNamespace(_resume_authorization=Mock())
+                self.greeting_started = asyncio.Event()
                 future = asyncio.get_running_loop().create_future()
                 future.set_result(None)
                 self.interrupt = Mock(return_value=future)
@@ -277,8 +298,11 @@ class WorkerLifecycle(OfflineRecoveryCase):
             async def generate_reply(self, **options):
                 self.greeting_options = options
                 self.greeting_calls += 1
+                self.greeting_started.set()
                 if failure == 'greeting':
                     raise RuntimeError('synthetic greeting failure')
+                while self.start_options['agent'].screening and not self.start_options['agent'].terminal_outcome:
+                    await asyncio.sleep(0)
                 if finish in ('tool_latency','tool_latency_interrupted'):
                     await self.start_options['agent'].get_cart_context(None)
                     if finish == 'tool_latency_interrupted':
@@ -324,43 +348,79 @@ class WorkerLifecycle(OfflineRecoveryCase):
                 self.assertNotIn('reasoning',model.call_args.kwargs['responses_options'])
                 self.assertEqual(model.call_args.kwargs['responses_options']['text'],{'verbosity':'low'})
 
-    async def test_amd_is_ready_before_dial_and_machine_never_gets_a_greeting(self):
+    async def test_greeting_starts_while_amd_pending_and_machine_interrupts(self):
         for category in ['machine-vm', 'machine-unavailable', 'machine-ivr', 'human', 'uncertain']:
             with self.subTest(category=category):
-                ctx, http, session = self.fixture()
-                self.detector.execute.return_value = SimpleNamespace(category=category, reason='llm')
+                ctx, http, session = self.fixture(finish='stay_connected')
+                release = asyncio.Event()
+                async def detect():
+                    await release.wait()
+                    return SimpleNamespace(category=category, reason='llm')
+                self.detector.execute.side_effect = detect
                 async def answered(**kwargs):
                     self.assertTrue(session.started.is_set())
                     ctx.room.local_participant.set_attributes.assert_awaited_once_with({'recovery.amd_ready':'synthetic'})
                     self.assertEqual(session.output.set_audio_enabled.call_args.args, (False,))
                     return next(iter(ctx.room.remote_participants.values()))
                 ctx.wait_for_participant.side_effect = answered
-                await self.run_fixture(ctx, http, session)
-                machine = category.startswith('machine-')
-                self.assertEqual(session.greeting_calls, int(not machine))
-                self.assertEqual(http.requests.count('not_reached'), int(machine))
-                if machine:
-                    payload = next(payload for name, payload in http.payloads if name == 'not_reached')
-                    self.assertEqual(payload['outcome'], 'no_answer' if category == 'machine-ivr' else 'voicemail')
-                    session.shutdown.assert_called_once_with(drain=False)
-                    self.assertNotIn('outcome', http.requests)
-                else:
+                task = asyncio.create_task(self.run_fixture(ctx, http, session))
+                try:
+                    await asyncio.wait_for(session.greeting_started.wait(), 1)
+                    self.assertFalse(release.is_set())
+                    self.assertEqual(session.greeting_calls, 1)
+                    session._activity._resume_authorization.assert_called_once()
                     self.assertEqual(session.output.set_audio_enabled.call_args.args, (True,))
-                self.assertFalse(self.amd.call_args.kwargs['ivr_detection'])
-                self.assertFalse(self.amd.call_args.kwargs['wait_until_finished'])
-                self.assertEqual(self.amd.call_args.kwargs['participant_identity'], 'buyer-synthetic')
+                    agent = session.start_options['agent']
+                    self.assertEqual(json.loads(await agent.tool('send_link'))['error'], 'answer_detection_pending')
+                    release.set()
+                    while agent.screening and not agent.terminal_outcome:
+                        await asyncio.sleep(0)
+                    machine = category.startswith('machine-')
+                    if not machine:
+                        session.emit('close', None)
+                    await task
+                    self.assertEqual(http.requests.count('not_reached'), int(machine))
+                    if machine:
+                        payload = next(payload for name, payload in http.payloads if name == 'not_reached')
+                        self.assertEqual(payload['outcome'], 'no_answer' if category == 'machine-ivr' else 'voicemail')
+                        self.assertEqual(session.output.set_audio_enabled.call_args.args, (False,))
+                        session.shutdown.assert_called_once_with(drain=False)
+                    self.assertNotIn('send_link', http.requests)
+                    self.assertFalse(self.amd.call_args.kwargs['interrupt_on_machine'])
+                    self.assertFalse(self.amd.call_args.kwargs['ivr_detection'])
+                    self.assertFalse(self.amd.call_args.kwargs['wait_until_finished'])
+                    self.assertEqual(self.amd.call_args.kwargs['participant_identity'], 'buyer-synthetic')
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    async def test_disconnect_cancels_pending_detection_without_false_outcome(self):
+        ctx, http, session = self.fixture(finish='stay_connected')
+        cancelled = asyncio.Event()
+        async def detect():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+        self.detector.execute.side_effect = detect
+        session.generate_reply = AsyncMock(side_effect=lambda **kw: session.greeting_started.set())
+        task = asyncio.create_task(self.run_fixture(ctx, http, session))
+        await asyncio.wait_for(session.greeting_started.wait(), 1)
+        while not self.detector.execute.await_count:
+            await asyncio.sleep(0)
+        ctx.room.emit('disconnected', None)
+        await task
+        self.assertTrue(cancelled.is_set())
+        self.assertNotIn('not_reached', http.requests)
+        self.assertEqual(http.requests.count('end'), 1)
 
     async def test_amd_failure_or_missing_audio_ends_quietly(self):
         for error in [True, False]:
             ctx, http, session = self.fixture()
             self.detector.execute.side_effect = TimeoutError('synthetic AMD timeout') if error else None
             self.detector.execute.return_value = SimpleNamespace(category='uncertain', reason='participant_missing')
-            if error:
-                with self.assertRaises(TimeoutError):
-                    await self.run_fixture(ctx, http, session)
-            else:
-                await self.run_fixture(ctx, http, session)
-            self.assertEqual(session.greeting_calls, 0)
+            await self.run_fixture(ctx, http, session)
+            self.assertEqual(session.greeting_calls, 1)
             self.assertEqual(http.requests.count('not_reached'), 1)
             self.assertEqual(http.requests.count('end'), 1)
 
@@ -371,9 +431,29 @@ class WorkerLifecycle(OfflineRecoveryCase):
             return SimpleNamespace(category='uncertain', reason='no_speech_timeout')
         self.detector.execute.side_effect = failed_provider
         await self.run_fixture(ctx, http, session)
-        self.assertEqual(session.greeting_calls, 0)
+        self.assertEqual(session.greeting_calls, 1)
         self.assertEqual(http.requests.count('not_reached'), 1)
         self.assertEqual(next(p['outcome'] for n,p in http.payloads if n=='not_reached'), 'technical_failure')
+
+    async def test_late_machine_verdict_after_disconnect_does_not_reclassify_call(self):
+        agent = self.module.RecoveryAgent('test', {'brand':'Test','brandVoice':'Friendly'}, None)
+        agent.finish_unreached = AsyncMock()
+        closed = asyncio.Event()
+        async def verdict_after_disconnect():
+            closed.set()
+            return SimpleNamespace(category='machine-vm', reason='llm')
+        self.detector.execute.side_effect = verdict_after_disconnect
+        await self.module.monitor_answer(self.detector, asyncio.Event(), agent, object(), closed)
+        agent.finish_unreached.assert_not_awaited()
+
+    async def test_detector_cleanup_failure_ends_call_instead_of_orphaning_monitor(self):
+        ctx, http, session = self.fixture(finish='stay_connected')
+        self.detector.aclose.side_effect = RuntimeError('synthetic detector cleanup failure')
+        await self.run_fixture(ctx, http, session)
+        outcomes = [p['outcome'] for n,p in http.payloads if n=='not_reached']
+        self.assertEqual(outcomes, ['technical_failure'])
+        self.assertEqual(session.output.set_audio_enabled.call_args.args, (False,))
+        self.assertEqual(http.requests.count('end'), 1)
 
     async def test_model_rejection_never_signals_readiness_or_waits_for_customer(self):
         ctx, http, session = self.fixture()
@@ -403,11 +483,10 @@ class WorkerLifecycle(OfflineRecoveryCase):
             session.emit('close', SimpleNamespace(reason=self.module.CloseReason.ERROR))
             raise RuntimeError('amd closed before a result was available')
         self.detector.execute.side_effect = fail
-        with self.assertRaises(RuntimeError):
-            await self.run_fixture(ctx, http, session)
+        await self.run_fixture(ctx, http, session)
         outcomes = [p['outcome'] for n,p in http.payloads if n=='not_reached']
         self.assertEqual(outcomes, ['technical_failure'])
-        self.assertEqual(session.greeting_calls, 0)
+        self.assertEqual(session.greeting_calls, 1)
 
     async def test_voicemail_tool_mutes_before_io_and_does_not_wait_for_playout(self):
         agent = self.module.RecoveryAgent('test', {'brand':'Test', 'brandVoice':'Friendly'}, None)
