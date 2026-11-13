@@ -264,6 +264,34 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         assert.deepEqual((await db.query('SELECT status,ended_at,cost_cents FROM recovery_calls WHERE id=$1',[call.id])).rows[0],ended);
     });
 
+    await t.test('reconciliation closes expired calls after a lost agent end request without a webhook',async()=>{
+        const { TwirpError }=require('livekit-server-sdk');
+        const f=await fixture(),other=await fixture(),demo=await fixture();
+        await activate(f);await activate(other);await activate(demo);
+        await db.query("UPDATE recovery_shops SET mode='live' WHERE id=ANY($1::uuid[])",[[f.shopId,other.shopId]]);
+        const call=await fakeCall(f),otherCall=await fakeCall(other),demoCall=await fakeCall(demo);
+        await db.query("UPDATE recovery_calls SET expires_at=NOW()-INTERVAL '1 minute' WHERE id=ANY($1::uuid[])",[[call.id,otherCall.id,demoCall.id]]);
+        await db.query("UPDATE recovery_checkouts SET status='calling' WHERE id=$1",[f.checkoutId]);
+        const before=hangup.mock.calls.length;
+        hangup.mock.mockImplementation(async()=>{throw new Error('Synthetic provider outage');});
+        try {
+            await hooks.reconcileStops(f.shopId);
+            let saved=(await db.query('SELECT status,ended_at FROM recovery_calls WHERE id=$1',[call.id])).rows[0];
+            assert.deepEqual(saved,{status:'dialing',ended_at:null});
+            hangup.mock.mockImplementation(async()=>{throw new TwirpError('Not Found','Synthetic room absent',404,'not_found');});
+            await hooks.reconcileStops(f.shopId);
+            saved=(await db.query('SELECT status,ended_at,connected_at,cost_cents,confirmed_duration_seconds,outcome FROM recovery_calls WHERE id=$1',[call.id])).rows[0];
+            assert.equal(saved.status,'ended');assert.ok(saved.ended_at);
+            for(const key of ['connected_at','cost_cents','confirmed_duration_seconds','outcome'])assert.equal(saved[key],null);
+            assert.equal((await db.query('SELECT status FROM recovery_checkouts WHERE id=$1',[f.checkoutId])).rows[0].status,'contacted');
+            assert.equal((await db.query('SELECT status FROM recovery_calls WHERE id=$1',[otherCall.id])).rows[0].status,'dialing');
+            await hooks.reconcileStops(f.shopId);
+            await hooks.reconcileStops(demo.shopId);
+            assert.equal(hangup.mock.calls.length,before+2);
+            assert.equal((await db.query("SELECT COUNT(*)::int n FROM recovery_events WHERE call_id=$1 AND kind='call_cleanup_confirmed'",[call.id])).rows[0].n,1);
+        } finally {hangup.mock.mockImplementation(async()=>{});}
+    });
+
     await t.test('merchant pause is admin-only, tenant scoped and stops further calls without changing settings',async()=>{
         const f=await fixture(),other=await fixture();await activate(f);await activate(other);
         await db.query("UPDATE recovery_shops SET mode='live' WHERE id=$1",[f.shopId]);
@@ -304,6 +332,7 @@ test('cart recovery persists policy, isolation and exactly-once intents in local
         } finally {hangup.mock.mockImplementation(async()=>{});}
         await hooks.reconcileStops(f.shopId);
         assert.equal(hangup.mock.calls.at(-1).arguments[0],`recovery-${call.id}`);
+        assert.equal((await db.query('SELECT status FROM recovery_calls WHERE id=$1',[call.id])).rows[0].status,'ended');
         assert.deepEqual(await s.endUnreached(call,'no_answer'),{ended:true});
         assert.equal((await db.query('SELECT outcome FROM recovery_calls WHERE id=$1',[call.id])).rows[0].outcome,'voicemail');
         const calls=hangup.mock.calls.length;

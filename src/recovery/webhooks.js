@@ -6,7 +6,6 @@ const { db, transaction, event } = require('./store');
 const shopify = require('./shopify');
 const policy = require('./policy');
 const service = require('./service');
-const telephony = require('./telephony');
 const { twilioSignature } = require('./twilio-signature');
 
 async function ingestShopify(shop, topic, payload, eventId) {
@@ -196,15 +195,16 @@ router.post('/twilio', express.urlencoded({ extended: false, limit: '8kb', param
 });
 
 async function reconcileStops(shopId = null) {
-    const { rows } = await db.query(`SELECT a.id,a.room FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
+    const { rows } = await db.query(`SELECT a.id,a.room,a.shop_id,a.checkout_id,s.customer_id FROM recovery_calls a JOIN recovery_shops s ON s.id=a.shop_id
         JOIN customers tenant ON tenant.id=s.customer_id
         JOIN recovery_contacts p ON p.shop_id=a.shop_id AND p.contact_key=a.contact_key
         JOIN recovery_checkouts c ON c.id=a.checkout_id
-        WHERE ($1::uuid IS NULL OR a.shop_id=$1) AND a.status IN ('reserved','dialing','connected','unknown')
+        WHERE ($1::uuid IS NULL OR a.shop_id=$1) AND s.mode='live'
+        AND a.status IN ('reserved','dialing','connected','unknown')
         AND (NOT tenant.is_active OR NOT s.enabled OR p.stopped_at IS NOT NULL OR c.completed_at IS NOT NULL OR a.expires_at<NOW()
             OR a.outcome IN ('voicemail','no_answer','technical_failure')) LIMIT 50`, [shopId]);
     await Promise.all(rows.map(async (row) => {
-        try { await telephony.hangup(row.room); }
+        try { await service.endCall(row); }
         catch { /* Retain the durable stop and retry cleanup on the next worker tick. */ }
     }));
 }
